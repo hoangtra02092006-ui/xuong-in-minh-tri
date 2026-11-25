@@ -16,7 +16,7 @@ coverage/
 
 # Backend storage
 backend/storage/
-storage/
+/storage/
 
 # IDE (keep shared VS Code settings)
 .idea/
@@ -33,3 +33,4 @@ Thumbs.db
 # Adobe ICC profile and real customer print files: not in the public repo (see docs/adr/004)
 *.icc
 samples/IN6*.tif
+.claude/worktrees/
