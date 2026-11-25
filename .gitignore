@@ -35,13 +35,9 @@ Thumbs.db
 samples/IN6*.tif
 .claude/worktrees/
 
-<<<<<<< HEAD
 # Deploy runtime files on the server
 deploy/.env
 deploy/data/
 
 # Local test files on the manager machine
-=======
-# Local scratch files (not for the repo)
->>>>>>> origin/main
 local/
