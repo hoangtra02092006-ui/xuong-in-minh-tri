@@ -28,7 +28,7 @@ Agent đề xuất A. **Người quản lý chọn B (25/11).** Cách giảm r�
 Thợ, chủ xưởng (trình duyệt, mạng nội bộ / Internet)
    │ HTTPS
    ▼
-Frontend tĩnh (Render Static Site) ──REST JSON, mm, CORS──► nginx có sẵn (HTTPS certbot, in.dreamate.me) ─► Backend Spring Boot (Docker)
+Frontend tĩnh (Render Static Site) ──REST JSON, mm, CORS──► nginx có sẵn (HTTPS certbot, in.thanhtungtextile.vn) ─► Backend Spring Boot (Docker)
                                                               trên máy chủ Tino 180.93.136.187
    link tải PDF/TIF/CẮT/zip trỏ thẳng tới backend            │ dùng chung máy với n8n
                                                               ▼
@@ -66,7 +66,7 @@ xuong-in-minh-tri/
 | PDF | Apache PDFBox 3 | Nhúng form XObject, Separation, OCG, render có alpha |
 | Frontend | Vue 3 + TypeScript + Vite + Pinia + Vue Router, Vitest | Người quản lý quen Vue; thêm Vitest để test thật thay script `.mjs` cũ |
 | Giao diện | CSS token tự viết (như cũ), không thêm thư viện UI | App 4 màn, thư viện UI chỉ tăng dung lượng |
-| Chạy backend | Docker (image có sẵn JRE 21) sau nginx đang có trên máy chủ Tino | Máy chủ đã chạy nginx + certbot cho n8n: thêm một server block riêng cho in.dreamate.me, không đụng site n8n; không cài thêm proxy thứ hai |
+| Chạy backend | Docker (image có sẵn JRE 21) sau nginx đang có trên máy chủ Tino | Máy chủ đã chạy nginx + certbot cho n8n: thêm một server block riêng cho in.thanhtungtextile.vn, không đụng site n8n; không cài thêm proxy thứ hai |
 
 Máy người quản lý đang có Java 20: cần cài JDK 21 (agent tự cài) để build ngoài Docker.
 
