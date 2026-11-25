@@ -13,6 +13,7 @@ spring:
       # Streamed responses (zip of many sheets) need a long timeout, otherwise the zip is cut short.
       request-timeout: ${APP_EXPORT_TIMEOUT_MS:1800000}
 
+# Every value comes from an environment variable with a default that runs as is (spec section 13).
 app:
   storage:
     path: ${APP_STORAGE_PATH:./storage}
@@ -22,3 +23,47 @@ app:
   retention:
     hours: ${APP_RETENTION_HOURS:48}
     sweep-minutes: ${APP_RETENTION_SWEEP_MINUTES:60}
+
+  # file/FileProperties
+  file:
+    trim-enabled: ${APP_TRIM_ENABLED:true}
+
+  # raster/RasterProperties (shared by the TIF and the cut file)
+  tiff:
+    max-heap-fraction: ${APP_TIFF_MAX_HEAP_FRACTION:0.5}
+    max-megapixels: ${APP_TIFF_MAX_MEGAPIXELS:100}
+    band-rows: ${APP_TIFF_BAND_ROWS:1024}
+    white-alpha-threshold: ${APP_TIFF_WHITE_ALPHA_THRESHOLD:128}
+    white-tolerance: ${APP_TIFF_WHITE_TOLERANCE:6}
+    # export/tif/TifProperties
+    encoder:
+      cmyk-profile: ${APP_TIFF_CMYK_PROFILE:classpath:color/USWebCoatedSWOP.icc}
+      compression: ${APP_TIFF_COMPRESSION:DEFLATE}
+      compression-quality: ${APP_TIFF_COMPRESSION_QUALITY:0.3}
+      transparent-layer: ${APP_TIFF_TRANSPARENT_LAYER:true}
+      layer-zip: ${APP_TIFF_LAYER_ZIP:true}
+      white-channel-name: ${APP_TIFF_WHITE_CHANNEL:W1}
+      white-choke-pixels: ${APP_TIFF_WHITE_CHOKE:1}
+
+  # export/cut/CutProperties (spec 10.5)
+  cut:
+    dpi: ${APP_CUT_DPI:300}
+    offset-mm: ${APP_CUT_OFFSET_MM:0.0}
+    simplify-mm: ${APP_CUT_SIMPLIFY_MM:0.1}
+    min-area-mm2: ${APP_CUT_MIN_AREA_MM2:0.2}
+    stroke-pt: ${APP_CUT_STROKE_PT:0.25}
+    spot-name: ${APP_CUT_SPOT_NAME:CutContour}
+    mark-length-mm: ${APP_CUT_MARK_LENGTH_MM:15.0}
+    mark-thickness-mm: ${APP_CUT_MARK_THICKNESS_MM:1.0}
+    mark-clearance-mm: ${APP_CUT_MARK_CLEARANCE_MM:5.0}
+    mark-top-left: ${APP_CUT_MARK_TOP_LEFT:SQUARE_WITH_EDGE}
+    mark-top-right: ${APP_CUT_MARK_TOP_RIGHT:SQUARE_WITH_EDGE}
+    mark-bottom-left: ${APP_CUT_MARK_BOTTOM_LEFT:SQUARE_WITH_EDGE}
+    mark-bottom-right: ${APP_CUT_MARK_BOTTOM_RIGHT:SQUARE_WITH_EDGE}
+    artwork-layer: ${APP_CUT_ARTWORK_LAYER:false}
+
+  # export/ExportProperties
+  export:
+    tif-dpi: ${APP_TIFF_DPI:300}
+    # A download waiting for a TIF still being built gives up after this (same bound as the zip).
+    wait-timeout-ms: ${APP_EXPORT_TIMEOUT_MS:1800000}
