@@ -3,7 +3,14 @@ package vn.minhtri.xuongin.shared;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -50,6 +57,48 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(NoResourceFoundException.class)
     ResponseEntity<ApiError> handleNoResource(NoResourceFoundException e) {
         return body(ErrorCode.INVALID_REQUEST, "Không có đường dẫn này.", Map.of());
+    }
+
+    /** e.g. PUT on /nesting/jobs. The contract has no 405 code: a wrong call is INVALID_REQUEST. */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    ResponseEntity<ApiError> handleMethod(HttpRequestMethodNotSupportedException e) {
+        log.debug("Method not supported: {}", e.getMessage());
+        return body(ErrorCode.INVALID_REQUEST, "Đường dẫn này không nhận phương thức " + e.getMethod() + ".", Map.of());
+    }
+
+    /** e.g. a JSON endpoint called with Content-Type text/plain. */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    ResponseEntity<ApiError> handleMediaType(HttpMediaTypeNotSupportedException e) {
+        log.debug("Media type not supported: {}", e.getMessage());
+        String type = e.getContentType() == null ? "trống" : e.getContentType().toString();
+        return body(ErrorCode.INVALID_REQUEST, "Kiểu dữ liệu gửi lên (" + type + ") không hỗ trợ.", Map.of());
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    ResponseEntity<ApiError> handleMissingParameter(MissingServletRequestParameterException e) {
+        return body(ErrorCode.INVALID_REQUEST, "Thiếu tham số \"" + e.getParameterName() + "\".", Map.of());
+    }
+
+    /** POST /files that is not multipart, or a broken multipart body. */
+    @ExceptionHandler({MissingServletRequestPartException.class, MultipartException.class})
+    ResponseEntity<ApiError> handleMultipart(Exception e) {
+        log.debug("Bad multipart request: {}", e.getMessage());
+        return body(ErrorCode.INVALID_REQUEST, "Dữ liệu tải lên không đúng định dạng (cần multipart/form-data).",
+                Map.of());
+    }
+
+    /**
+     * A streamed response (zip) or a long wait ran past APP_EXPORT_TIMEOUT_MS. Nothing can be
+     * written once the response started; otherwise the client may simply try again.
+     */
+    @ExceptionHandler(AsyncRequestTimeoutException.class)
+    ResponseEntity<ApiError> handleAsyncTimeout(AsyncRequestTimeoutException e, HttpServletResponse response) {
+        log.warn("Async request timed out (APP_EXPORT_TIMEOUT_MS)");
+        if (response.isCommitted()) {
+            return null;
+        }
+        return body(ErrorCode.JOB_NOT_READY, "Máy chủ chưa chuẩn bị xong file trong thời hạn chờ. Hãy thử tải lại sau"
+                + " ít phút.", Map.of());
     }
 
     @ExceptionHandler(Exception.class)
