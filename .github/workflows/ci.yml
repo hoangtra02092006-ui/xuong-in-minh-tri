@@ -36,3 +36,20 @@ jobs:
           done
           exit 1
       - run: ./mvnw -B verify
+
+  docker:
+    # Builds the backend image and checks the health endpoint answers inside a 1.5 GB container.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t xuong-in-backend:ci backend
+      - name: Start container with the production memory limit
+        run: |
+          docker run -d --name xi -m 1536m -p 127.0.0.1:8095:8080 xuong-in-backend:ci
+          for i in $(seq 1 30); do
+            if curl -fs http://127.0.0.1:8095/api/v1/health; then echo; exit 0; fi
+            sleep 3
+          done
+          docker logs xi
+          exit 1
+      - run: docker exec xi sh -c 'command -v wget'
