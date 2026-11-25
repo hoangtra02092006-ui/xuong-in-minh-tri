@@ -97,6 +97,38 @@ public final class NestRequestValidator {
         }
     }
 
+    /**
+     * Refuses a job with more pieces than {@code limits.maxTotalPieces()} in all, or a piece with a
+     * side shorter than {@code limits.minPieceMm()} ({@code INVALID_REQUEST}).
+     */
+    public static void checkLimits(List<ResolvedItem> items, NestingProperties limits) {
+        long total = 0;
+        for (ResolvedItem item : items) {
+            total += item.quantity();
+        }
+        if (total > limits.maxTotalPieces()) {
+            throw new ApiException(ErrorCode.INVALID_REQUEST, String.format(Locale.ROOT,
+                    "Tổng số bản (%d) vượt giới hạn %d bản mỗi lần ghép. Hãy chia đơn thành nhiều lần ghép.",
+                    total, limits.maxTotalPieces()),
+                    Map.of("totalPieces", total, "maxTotalPieces", limits.maxTotalPieces()));
+        }
+        for (ResolvedItem item : items) {
+            if (Math.min(item.widthMm(), item.heightMm()) < limits.minPieceMm()) {
+                throw new ApiException(ErrorCode.INVALID_REQUEST, String.format(Locale.ROOT,
+                        "Hình \"%s\" %sx%s mm quá nhỏ: mỗi cạnh phải từ %s mm trở lên.", item.label(),
+                        mm(item.widthMm()), mm(item.heightMm()), mm(limits.minPieceMm())),
+                        Map.of("fileId", item.fileId(), "label", item.label()));
+            }
+        }
+    }
+
+    /** mm in Vietnamese style: decimal comma, at most 2 decimals, no trailing zeros (tiny sizes stay readable). */
+    static String mm(double mm) {
+        double rounded = Math.round(mm * 100.0) / 100.0;
+        String text = rounded == Math.rint(rounded) ? String.valueOf((long) rounded) : String.valueOf(rounded);
+        return text.replace('.', ',');
+    }
+
     /** mm to cm in Vietnamese style: decimal comma, at most 2 decimals, no trailing zeros. */
     static String cm(double mm) {
         double cm = Math.round(mm * 10.0) / 100.0;

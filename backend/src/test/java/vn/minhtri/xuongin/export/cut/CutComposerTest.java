@@ -9,14 +9,14 @@ import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.List;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
-import org.apache.pdfbox.pdmodel.font.PDType1Font;
-import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
+import org.apache.pdfbox.pdmodel.font.PDType0Font;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -39,6 +39,9 @@ class CutComposerTest {
     private static final double PX_MM = 25.4 / 300;
 
     private static final long TWO_GB = 2L << 30;
+
+    /** Ships inside the PDFBox jar, so every OS renders the same glyphs. */
+    private static final String EMBEDDED_FONT = "/org/apache/pdfbox/resources/ttf/LiberationSans-Regular.ttf";
 
     @TempDir
     Path tmp;
@@ -126,11 +129,12 @@ class CutComposerTest {
 
     @Test
     void smallTextKeepsEveryLetter() throws IOException {
-        // 7 pt caps (cap height ~1.8 mm, strokes ~0.25 mm = 3 px): the case where the old
-        // choked mask broke "NGUYÊN BẢN TRÀ VIỆT" into specks. 16 separate capital letters;
+        // 7 pt caps (cap height ~1.8 mm, strokes ~0.2 mm = 2-3 px): the case where the old
+        // choked mask broke "NGUYÊN BẢN TRÀ VIỆT" into specks. 16 separate capital letters
+        // (1 pt = 4 px apart, so they never touch whatever the anti-aliasing);
         // counters: B has 2, A, R, A one each = 5. The smallest counters may fall under the
         // 0.2 mm² dust floor (the letter is still cut around), but none may disappear silently.
-        fx.pdf("t", textPdf("t", 60, 6, 7, "NGUYEN BAN TRA VIET"), 60, 6);
+        fx.pdf("t", textPdf("t", 60, 6, 7, 1f, "NGUYEN BAN TRA VIET"), 60, 6);
         Result cut = compose(300, 100, false, List.of(fx.place("t", 80, 40, false)), CutProperties.defaults());
         assertThat(cut.result.outerContours()).isEqualTo(16);
         assertThat(cut.result.holeContours() + cut.result.droppedSpecks()).isEqualTo(5);
@@ -305,7 +309,7 @@ class CutComposerTest {
         assertThatThrownBy(() -> composer.compose(sheet, fx::get, pdf, new ByteArrayOutputStream()))
                 .isInstanceOfSatisfying(ApiException.class, ex -> {
                     assertThat(ex.code()).isEqualTo(ErrorCode.TIFF_TOO_LARGE);
-                    assertThat(ex.getMessage()).contains("file cắt").contains("APP_CUT_DPI");
+                    assertThat(ex.getMessage()).contains("file cắt").contains("giảm chiều dài tối đa mỗi file").contains("APP_CUT_DPI");
                     assertThat(ex.details()).containsKey("suggestedDpi");
                     assertThat((Integer) ex.details().get("suggestedDpi")).isLessThan(300).isGreaterThanOrEqualTo(50);
                 });
@@ -339,6 +343,37 @@ class CutComposerTest {
         CutComposer composer = composer(CutProperties.defaults(), TWO_GB);
         assertThatThrownBy(() -> composer.compose(sheet, fx::get, pdf, new ByteArrayOutputStream()))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void outOfMemoryDuringTheBuildIsTiffTooLargeNotInternalError() throws IOException {
+        fx.pdf("a", SheetFixtures.SAMPLES.resolve("nhan-7x3.pdf"), 70, 30);
+        Sheet sheet = fx.sheet(100, 50, List.of(fx.place("a", 0, 0, false)));
+        Path pdf = fx.compose("oom", 100, 50, false, sheet.placements());
+        RasterProperties raster = RasterProperties.defaults();
+        SheetRasterizer rasterizer = org.mockito.Mockito.mock(SheetRasterizer.class);
+        org.mockito.Mockito.when(rasterizer.bandRows()).thenReturn(1024);
+        org.mockito.Mockito.when(rasterizer.render(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new OutOfMemoryError("Java heap space"));
+        CutComposer composer = new CutComposer(rasterizer, raster, new RasterMemoryGuard(raster, () -> TWO_GB),
+                CutProperties.defaults());
+        assertThatThrownBy(() -> composer.compose(sheet, fx::get, pdf, new ByteArrayOutputStream()))
+                .isInstanceOfSatisfying(ApiException.class, ex -> {
+                    assertThat(ex.code()).isEqualTo(ErrorCode.TIFF_TOO_LARGE);
+                    assertThat(ex.getMessage()).contains("file cắt tấm 1", "giảm chiều dài tối đa mỗi file");
+                });
+    }
+
+    @Test
+    void estimateOfASheetMatchesTheRasterEstimateAndRefusesOversizedSheets() {
+        Sheet sheet = fx.sheet(570, 1000, List.of());
+        // 6732 x 11811 px mask + one band of 1088 rows x 8 bytes.
+        assertThat(composer(CutProperties.defaults(), TWO_GB).estimateBytes(sheet))
+                .isEqualTo(6732L * 11811 + 1088L * 6732 * 8);
+        assertThatThrownBy(() -> composer(CutProperties.defaults(), 80L << 20).estimateBytes(sheet))
+                .isInstanceOfSatisfying(ApiException.class,
+                        ex -> assertThat(ex.code()).isEqualTo(ErrorCode.TIFF_TOO_LARGE));
     }
 
     // ---------- helpers ----------
@@ -390,8 +425,18 @@ class CutComposerTest {
         return out;
     }
 
-    /** Black Helvetica-Bold text on a transparent page of {@code w × h} mm. */
+    /**
+     * Black text on a transparent page of {@code w × h} mm, in the Liberation Sans that ships inside
+     * PDFBox, EMBEDDED: a non-embedded standard font is drawn with whatever substitute the OS has
+     * (Windows: two 7 pt letters touched and merged into one contour), so the glyphs must not
+     * depend on the machine. {@code spacingPt} is extra space between letters.
+     */
     private Path textPdf(String name, double w, double h, float sizePt, String text) throws IOException {
+        return textPdf(name, w, h, sizePt, 0f, text);
+    }
+
+    private Path textPdf(String name, double w, double h, float sizePt, float spacingPt, String text)
+            throws IOException {
         Path out = tmp.resolve(name + ".pdf");
         try (PDDocument doc = new PDDocument()) {
             PDPage page = new PDPage(new PDRectangle((float) Units.mmToPt(w), (float) Units.mmToPt(h)));
@@ -399,7 +444,10 @@ class CutComposerTest {
             try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
                 cs.setNonStrokingColor(0f, 0f, 0f);
                 cs.beginText();
-                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA_BOLD), sizePt);
+                try (InputStream font = PDDocument.class.getResourceAsStream(EMBEDDED_FONT)) {
+                    cs.setFont(PDType0Font.load(doc, font), sizePt);
+                }
+                cs.setCharacterSpacing(spacingPt);
                 cs.newLineAtOffset(2, (float) Units.mmToPt(h) / 2 - sizePt / 3);
                 cs.showText(text);
                 cs.endText();

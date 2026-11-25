@@ -34,3 +34,6 @@ Thumbs.db
 *.icc
 samples/IN6*.tif
 .claude/worktrees/
+
+# Local scratch files (not for the repo)
+local/

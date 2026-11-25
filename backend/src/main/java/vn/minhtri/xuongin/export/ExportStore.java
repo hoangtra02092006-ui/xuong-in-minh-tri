@@ -96,9 +96,17 @@ public class ExportStore implements RetentionParticipant {
         return pdf(job, sheet, false);
     }
 
+    /** Where {@link #printPdf} puts the file (it may not exist yet). */
+    public Path printPdfPath(Job job, Sheet sheet) {
+        return pdfPath(job, sheet, job.request().drawCutLinesOrDefault());
+    }
+
+    private Path pdfPath(Job job, Sheet sheet, boolean cutLines) {
+        return sheetFile(job.jobId(), sheet.index(), cutLines ? "-vien.pdf" : ".pdf");
+    }
+
     private Path pdf(Job job, Sheet sheet, boolean cutLines) throws IOException {
-        String suffix = cutLines ? "-vien.pdf" : ".pdf";
-        return ensure(sheetFile(job.jobId(), sheet.index(), suffix), out ->
+        return ensure(pdfPath(job, sheet, cutLines), out ->
                 composer.compose(sheet, id -> files.find(id).orElse(null), files::pathOf, cutLines, out));
     }
 

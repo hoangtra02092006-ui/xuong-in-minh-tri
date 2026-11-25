@@ -56,7 +56,36 @@ class TifEncoderFactoryTest {
                     assertThat(p.layerZip()).isTrue();
                     assertThat(p.whiteChannelName()).isEqualTo("W1");
                     assertThat(p.whiteChokePixels()).isEqualTo(1);
+                    assertThat(p.colorMode()).isEqualTo(TifColorMode.CMYK);
+                    assertThat(p.whiteEnabled()).isTrue();
                 });
+    }
+
+    @Test
+    void bindsRgbModeAndWhiteSwitchInLowerCase() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(Config.class)
+                .withPropertyValues("app.tiff.encoder.color-mode=rgb", "app.tiff.encoder.white-enabled=false")
+                .run(context -> {
+                    TifProperties p = context.getBean(TifProperties.class);
+                    assertThat(p.colorMode()).isEqualTo(TifColorMode.RGB);
+                    assertThat(p.whiteEnabled()).isFalse();
+                });
+    }
+
+    @Test
+    void rgbModeNeedsNoCmykProfileAndEmbedsSrgb() throws IOException {
+        TifProperties rgb = new TifProperties(dir.resolve("none.icc").toString(), TifCompression.DEFLATE, 0.3,
+                false, true, "W1", 1, TifColorMode.RGB, true);
+        Path target = dir.resolve("rgb.tif");
+        try (TifEncoder encoder = new TifEncoderFactory(rgb).open(target, 2, 1, 300, new byte[] {1, 0})) {
+            encoder.accept(0, 1, 2, new int[] {0xFFFF0000, 0x00000000});
+            encoder.finish();
+        }
+        TiffTestReader.Tiff tif = TiffTestReader.parse(Files.readAllBytes(target));
+        assertThat(tif.get(TifEncoder.TAG_PHOTOMETRIC)).isEqualTo(2);
+        assertThat(tif.raw(TifEncoder.TAG_ICC_PROFILE)).isEqualTo(TifEncoderFactory.srgbProfile());
+        assertThat(tif.samples()).containsExactly(0xFF, 0, 0, 0xFF, 0xFF, 0xFF);
     }
 
     @Test

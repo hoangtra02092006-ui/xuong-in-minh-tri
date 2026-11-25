@@ -48,7 +48,7 @@ class NestingJobServiceTest {
 
     private NestingJobService service(NestingPlanner planner) {
         service = new NestingJobService(jobs, new DiskFileStore(java.nio.file.Path.of("target", "unused")), planner,
-                events::add);
+                events::add, NestingProperties.defaults());
         return service;
     }
 

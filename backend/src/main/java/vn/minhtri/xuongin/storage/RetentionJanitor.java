@@ -26,7 +26,7 @@ import vn.minhtri.xuongin.shared.AppProperties;
 public class RetentionJanitor {
 
     /** Below this much free space the log gets a warning (design section 7: disk had 12 GB left). */
-    static final long LOW_DISK_BYTES = 3L * 1024 * 1024 * 1024;
+    public static final long LOW_DISK_BYTES = 3L * 1024 * 1024 * 1024;
 
     private static final Logger log = LoggerFactory.getLogger(RetentionJanitor.class);
 
@@ -103,7 +103,7 @@ public class RetentionJanitor {
     }
 
     /** Free bytes on the volume holding {@code path} (or its nearest existing parent); null when unknown. */
-    static Long usableBytes(Path path) {
+    public static Long usableBytes(Path path) {
         Path existing = path;
         while (existing != null && !Files.exists(existing)) {
             existing = existing.getParent();

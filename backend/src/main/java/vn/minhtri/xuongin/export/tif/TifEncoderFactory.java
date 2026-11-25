@@ -47,14 +47,28 @@ public class TifEncoderFactory {
      * @param dpi     written to XResolution / YResolution
      * @param inkMask whole-sheet mask, row-major, non-zero = something prints (not contracted;
      *                the encoder contracts it for W1 by {@code whiteChokePixels})
-     * @throws ApiException {@code INTERNAL_ERROR} when the ICC profile is missing or not CMYK
+     * @throws ApiException {@code INTERNAL_ERROR} when (CMYK mode) the ICC profile is missing or not CMYK
      */
     public TifEncoder open(Path target, int width, int height, int dpi, byte[] inkMask) throws IOException {
-        CmykProfile cmyk = cmykProfile();
-        TifEncoder.Options options = new TifEncoder.Options(new IccCmykConverter(cmyk.profile()), cmyk.bytes(),
-                properties.whiteChannelName(), properties.whiteChokePixels(), properties.compression(),
-                properties.compressionQuality(), properties.transparentLayer(), properties.layerZip());
+        TifEncoder.Options options;
+        if (properties.colorMode() == TifColorMode.RGB) {
+            // Spec 10.2 "rgb": RGB + sRGB, no W1. The CMYK profile is not needed.
+            options = new TifEncoder.Options(null, srgbProfile(), properties.whiteChannelName(),
+                    properties.whiteChokePixels(), properties.compression(), properties.compressionQuality(),
+                    properties.transparentLayer(), properties.layerZip(), TifColorMode.RGB, false);
+        } else {
+            CmykProfile cmyk = cmykProfile();
+            options = new TifEncoder.Options(new IccCmykConverter(cmyk.profile()), cmyk.bytes(),
+                    properties.whiteChannelName(), properties.whiteChokePixels(), properties.compression(),
+                    properties.compressionQuality(), properties.transparentLayer(), properties.layerZip(),
+                    TifColorMode.CMYK, properties.whiteEnabled());
+        }
         return new TifEncoder(target, width, height, dpi, inkMask, options);
+    }
+
+    /** Java's built-in sRGB profile, embedded in RGB TIFs (the pixels are rendered in sRGB). */
+    static byte[] srgbProfile() {
+        return ICC_Profile.getInstance(ColorSpace.CS_sRGB).getData();
     }
 
     CmykProfile cmykProfile() {

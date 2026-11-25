@@ -46,8 +46,11 @@ public class NestingJobService {
     private final NestingPlanner planner;
     private final ApplicationEventPublisher events;
     private final ThreadPoolExecutor executor;
+    private final NestingProperties limits;
 
-    public NestingJobService(JobStore jobs, FileStore files, NestingPlanner planner, ApplicationEventPublisher events) {
+    public NestingJobService(JobStore jobs, FileStore files, NestingPlanner planner, ApplicationEventPublisher events,
+            NestingProperties limits) {
+        this.limits = limits;
         this.jobs = jobs;
         this.files = files;
         this.planner = planner;
@@ -68,13 +71,14 @@ public class NestingJobService {
     }
 
     /**
-     * Validates synchronously (spec 6.3: FILE_NOT_FOUND, ITEM_WIDER_THAN_SHEET) and starts the job.
+     * Validates synchronously (spec 6.3: FILE_NOT_FOUND, safety limits, ITEM_WIDER_THAN_SHEET) and starts the job.
      *
      * @return the PENDING job
      */
     public Job create(NestRequest request) {
         Map<String, StoredFile> found = NestRequestValidator.requireFiles(request, id -> files.find(id).orElse(null));
         List<ResolvedItem> items = NestRequestValidator.resolve(request, found);
+        NestRequestValidator.checkLimits(items, limits);
         NestRequestValidator.checkWidths(request, items);
 
         Job job = Job.pending(UUID.randomUUID().toString(), request);
