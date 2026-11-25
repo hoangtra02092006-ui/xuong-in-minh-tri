@@ -1,0 +1,21 @@
+/* Design tokens. Values are set by the UI card from DESIGN.md; components only use these variables. */
+:root {
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --color-bg: #f7f7f5;
+  --color-surface: #ffffff;
+  --color-text: #1c1c1a;
+  --color-muted: #6b6b66;
+  --color-border: #e3e3de;
+  --color-primary: #1d4ed8;
+  --color-success: #15803d;
+  --color-danger: #b91c1c;
+  --radius: 8px;
+  --space: 8px;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--color-bg);
+  color: var(--color-text);
+}

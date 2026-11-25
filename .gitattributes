@@ -1,0 +1,21 @@
+# Normalize text to LF in the repo; working tree follows the OS.
+* text=auto
+
+# Binary files: never touch line endings (PDF xref and TIFF tag offsets break otherwise).
+*.pdf   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.tif   binary
+*.tiff  binary
+*.zip   binary
+*.jar   binary
+*.ico   binary
+*.icc   binary
+*.icm   binary
+
+# Shell scripts must keep LF to run in Linux/Docker; batch files keep CRLF.
+mvnw       text eol=lf
+*.sh       text eol=lf
+mvnw.cmd   text eol=crlf
+*.bat      text eol=crlf

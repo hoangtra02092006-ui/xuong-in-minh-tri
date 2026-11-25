@@ -1,0 +1,35 @@
+# Java / Maven
+target/
+*.class
+
+# Node / Vite
+node_modules/
+dist/
+coverage/
+*.local
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Backend storage
+backend/storage/
+storage/
+
+# IDE (keep shared VS Code settings)
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Adobe ICC profile and real customer print files: not in the public repo (see docs/adr/004)
+*.icc
+samples/IN6*.tif
