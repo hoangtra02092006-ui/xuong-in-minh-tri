@@ -6,9 +6,11 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -34,13 +36,22 @@ public class RetentionJanitor {
     private final Path storageRoot;
     private final Clock clock;
     private final long lowDiskBytes;
+    private final List<RetentionParticipant> participants;
 
     @Autowired
-    public RetentionJanitor(FileStore files, JobStore jobs, AppProperties props) {
-        this(files, jobs, props.retention().hours(), Path.of(props.storage().path()), Clock.systemUTC(), LOW_DISK_BYTES);
+    public RetentionJanitor(FileStore files, JobStore jobs, AppProperties props,
+            ObjectProvider<RetentionParticipant> participants) {
+        this(files, jobs, props.retention().hours(), Path.of(props.storage().path()), Clock.systemUTC(), LOW_DISK_BYTES,
+                participants.orderedStream().toList());
     }
 
     RetentionJanitor(FileStore files, JobStore jobs, int retentionHours, Path storageRoot, Clock clock, long lowDiskBytes) {
+        this(files, jobs, retentionHours, storageRoot, clock, lowDiskBytes, List.of());
+    }
+
+    RetentionJanitor(FileStore files, JobStore jobs, int retentionHours, Path storageRoot, Clock clock, long lowDiskBytes,
+            List<RetentionParticipant> participants) {
+        this.participants = List.copyOf(participants);
         this.files = files;
         this.jobs = jobs;
         this.retentionHours = retentionHours;
@@ -50,7 +61,7 @@ public class RetentionJanitor {
     }
 
     /** Result of one sweep, for logs and tests. */
-    public record SweepResult(int filesRemoved, int jobsRemoved, boolean lowDisk) {}
+    public record SweepResult(int filesRemoved, int jobsRemoved, boolean lowDisk, int extrasRemoved) {}
 
     @Scheduled(
             fixedDelayString = "${app.retention.sweep-minutes:60}",
@@ -63,16 +74,22 @@ public class RetentionJanitor {
     public SweepResult sweep() {
         int filesRemoved = 0;
         int jobsRemoved = 0;
+        int extrasRemoved = 0;
         if (retentionHours > 0) {
             Instant cutoff = clock.instant().minus(Duration.ofHours(retentionHours));
             filesRemoved = files.purgeOlderThan(cutoff);
             jobsRemoved = jobs.purgeOlderThan(cutoff);
-            if (filesRemoved > 0 || jobsRemoved > 0) {
-                log.info("Retention sweep removed {} files and {} jobs older than {}", filesRemoved, jobsRemoved, cutoff);
+            // After the jobs: a participant also drops data whose job was just removed.
+            for (RetentionParticipant participant : participants) {
+                extrasRemoved += participant.purgeOlderThan(cutoff);
+            }
+            if (filesRemoved > 0 || jobsRemoved > 0 || extrasRemoved > 0) {
+                log.info("Retention sweep removed {} files, {} jobs and {} other items older than {}",
+                        filesRemoved, jobsRemoved, extrasRemoved, cutoff);
             }
         }
         boolean lowDisk = checkFreeDisk();
-        return new SweepResult(filesRemoved, jobsRemoved, lowDisk);
+        return new SweepResult(filesRemoved, jobsRemoved, lowDisk, extrasRemoved);
     }
 
     private boolean checkFreeDisk() {
