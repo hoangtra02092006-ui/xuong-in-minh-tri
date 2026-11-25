@@ -236,6 +236,32 @@ class NestingApiIntegrationTest {
     }
 
     @Test
+    void absurdQuantitiesAndTinyPiecesAreRefusedBeforeTheJob() throws Exception {
+        String a = upload("nhan-7x3.pdf");
+        // Review: quantity 2e9 with 0.01 mm pieces ran the nesting thread out of memory.
+        mvc.perform(post("/api/v1/nesting/jobs").contentType(MediaType.APPLICATION_JSON)
+                        .content(body(570, 5, 3, null, "{\"fileId\":\"" + a
+                                + "\",\"quantity\":2000000000,\"allowRotate\":true,\"widthMm\":0.01,\"heightMm\":0.01}")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.error.message").value("Số lượng mỗi hình tối đa là 10.000 bản."));
+        mvc.perform(post("/api/v1/nesting/jobs").contentType(MediaType.APPLICATION_JSON)
+                        .content(body(570, 5, 3, null, item(a, 6000), item(a, 4001))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.error.message").value(
+                        "Tổng số bản (10001) vượt giới hạn 10000 bản mỗi lần ghép. Hãy chia đơn thành nhiều lần ghép."))
+                .andExpect(jsonPath("$.error.details.totalPieces").value(10001));
+        mvc.perform(post("/api/v1/nesting/jobs").contentType(MediaType.APPLICATION_JSON)
+                        .content(body(570, 5, 3, null, "{\"fileId\":\"" + a
+                                + "\",\"quantity\":1,\"allowRotate\":true,\"widthMm\":0.01,\"heightMm\":30}")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.error.message").value(
+                        "Hình \"nhan-7x3.pdf\" 0,01x30 mm quá nhỏ: mỗi cạnh phải từ 1 mm trở lên."));
+    }
+
+    @Test
     void unknownFileIsFileNotFound() throws Exception {
         mvc.perform(post("/api/v1/nesting/jobs").contentType(MediaType.APPLICATION_JSON)
                         .content(body(570, 5, 3, null, item("khong-co", 1))))

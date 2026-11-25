@@ -1,5 +1,6 @@
 package vn.minhtri.xuongin.nesting.model;
 
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
@@ -7,7 +8,12 @@ import jakarta.validation.constraints.Positive;
 /** One design in the order. widthMm/heightMm override the size read from the file. */
 public record NestItemRequest(
         @NotBlank(message = "Thiếu mã file.") String fileId,
-        @Min(value = 1, message = "Số lượng tối thiểu là 1.") int quantity,
+        @Min(value = 1, message = "Số lượng tối thiểu là 1.")
+        @Max(value = NestItemRequest.MAX_QUANTITY, message = "Số lượng mỗi hình tối đa là 10.000 bản.") int quantity,
         boolean allowRotate,
         @Positive(message = "Chiều rộng phải lớn hơn 0.") Double widthMm,
-        @Positive(message = "Chiều cao phải lớn hơn 0.") Double heightMm) {}
+        @Positive(message = "Chiều cao phải lớn hơn 0.") Double heightMm) {
+
+    /** Per row; the whole job is capped by {@code app.nesting.max-total-pieces}. */
+    public static final int MAX_QUANTITY = 10_000;
+}
