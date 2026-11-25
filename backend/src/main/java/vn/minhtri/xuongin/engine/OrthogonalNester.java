@@ -164,8 +164,15 @@ final class OrthogonalNester {
                 order.set(i, order.get(j));
                 order.set(j, tmp);
             }
-            PackResult attempt =
-                    minimizeLength(order, lowerBound, best.usedLength(), plan.allowRotate(), plan.heuristic());
+            // One pack on a strip one unit shorter than the best answers "is this order shorter?"; the full
+            // length search only runs on the rare improvement, so a round costs one pack instead of ~17.
+            PackResult probe = new MaxRectsPacker(usableWidth, best.usedLength() - 1, plan.heuristic())
+                    .pack(order, plan.allowRotate());
+            if (!probe.packedEverything()) {
+                continue;
+            }
+            PackResult attempt = shorterOf(probe,
+                    minimizeLength(order, lowerBound, probe.usedLength() - 1, plan.allowRotate(), plan.heuristic()));
             if (shorter(attempt, best)) {
                 best = attempt;
                 current = order;
