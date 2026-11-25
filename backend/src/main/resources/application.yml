@@ -35,6 +35,8 @@ app:
     band-rows: ${APP_TIFF_BAND_ROWS:1024}
     white-alpha-threshold: ${APP_TIFF_WHITE_ALPHA_THRESHOLD:128}
     white-tolerance: ${APP_TIFF_WHITE_TOLERANCE:6}
+    # A cut file waits this long for TIF / other cut builds to free the shared raster budget.
+    budget-wait-ms: ${APP_TIFF_BUDGET_WAIT_MS:120000}
     # export/tif/TifProperties
     encoder:
       cmyk-profile: ${APP_TIFF_CMYK_PROFILE:classpath:color/USWebCoatedSWOP.icc}

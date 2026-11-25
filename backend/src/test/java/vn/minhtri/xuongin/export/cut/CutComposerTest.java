@@ -309,7 +309,7 @@ class CutComposerTest {
         assertThatThrownBy(() -> composer.compose(sheet, fx::get, pdf, new ByteArrayOutputStream()))
                 .isInstanceOfSatisfying(ApiException.class, ex -> {
                     assertThat(ex.code()).isEqualTo(ErrorCode.TIFF_TOO_LARGE);
-                    assertThat(ex.getMessage()).contains("file cắt").contains("APP_CUT_DPI");
+                    assertThat(ex.getMessage()).contains("file cắt").contains("giảm chiều dài tối đa mỗi file").contains("APP_CUT_DPI");
                     assertThat(ex.details()).containsKey("suggestedDpi");
                     assertThat((Integer) ex.details().get("suggestedDpi")).isLessThan(300).isGreaterThanOrEqualTo(50);
                 });
@@ -343,6 +343,37 @@ class CutComposerTest {
         CutComposer composer = composer(CutProperties.defaults(), TWO_GB);
         assertThatThrownBy(() -> composer.compose(sheet, fx::get, pdf, new ByteArrayOutputStream()))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void outOfMemoryDuringTheBuildIsTiffTooLargeNotInternalError() throws IOException {
+        fx.pdf("a", SheetFixtures.SAMPLES.resolve("nhan-7x3.pdf"), 70, 30);
+        Sheet sheet = fx.sheet(100, 50, List.of(fx.place("a", 0, 0, false)));
+        Path pdf = fx.compose("oom", 100, 50, false, sheet.placements());
+        RasterProperties raster = RasterProperties.defaults();
+        SheetRasterizer rasterizer = org.mockito.Mockito.mock(SheetRasterizer.class);
+        org.mockito.Mockito.when(rasterizer.bandRows()).thenReturn(1024);
+        org.mockito.Mockito.when(rasterizer.render(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new OutOfMemoryError("Java heap space"));
+        CutComposer composer = new CutComposer(rasterizer, raster, new RasterMemoryGuard(raster, () -> TWO_GB),
+                CutProperties.defaults());
+        assertThatThrownBy(() -> composer.compose(sheet, fx::get, pdf, new ByteArrayOutputStream()))
+                .isInstanceOfSatisfying(ApiException.class, ex -> {
+                    assertThat(ex.code()).isEqualTo(ErrorCode.TIFF_TOO_LARGE);
+                    assertThat(ex.getMessage()).contains("file cắt tấm 1", "giảm chiều dài tối đa mỗi file");
+                });
+    }
+
+    @Test
+    void estimateOfASheetMatchesTheRasterEstimateAndRefusesOversizedSheets() {
+        Sheet sheet = fx.sheet(570, 1000, List.of());
+        // 6732 x 11811 px mask + one band of 1088 rows x 8 bytes.
+        assertThat(composer(CutProperties.defaults(), TWO_GB).estimateBytes(sheet))
+                .isEqualTo(6732L * 11811 + 1088L * 6732 * 8);
+        assertThatThrownBy(() -> composer(CutProperties.defaults(), 80L << 20).estimateBytes(sheet))
+                .isInstanceOfSatisfying(ApiException.class,
+                        ex -> assertThat(ex.code()).isEqualTo(ErrorCode.TIFF_TOO_LARGE));
     }
 
     // ---------- helpers ----------

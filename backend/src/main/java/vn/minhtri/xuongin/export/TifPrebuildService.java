@@ -23,6 +23,7 @@ import vn.minhtri.xuongin.job.JobStatus;
 import vn.minhtri.xuongin.job.JobStore;
 import vn.minhtri.xuongin.nesting.JobFinishedEvent;
 import vn.minhtri.xuongin.nesting.model.Sheet;
+import vn.minhtri.xuongin.raster.RasterMemoryGuard;
 import vn.minhtri.xuongin.shared.ApiError;
 import vn.minhtri.xuongin.shared.ApiException;
 import vn.minhtri.xuongin.shared.ErrorCode;
@@ -240,12 +241,17 @@ public class TifPrebuildService {
             TifResult result = builder.build(job, sheet, store.tifPath(job.jobId(), task.index()));
             path = result.path();
             outcome = SheetTif.ready(result.sizeBytes());
+        } catch (OutOfMemoryError e) {
+            ApiException mapped = RasterMemoryGuard.outOfMemory(task.index(), "TIF");
+            failure = mapped;
+            outcome = SheetTif.failed(new ApiError.Body(mapped.code().name(), mapped.getMessage(), mapped.details()));
+            log.warn("TIF of job {} sheet {} ran out of memory", task.jobId(), task.index() + 1);
         } catch (ApiException e) {
             failure = e;
             outcome = SheetTif.failed(new ApiError.Body(e.code().name(), e.getMessage(), e.details()));
             log.warn("TIF of job {} sheet {} failed: {} {}", task.jobId(), task.index() + 1, e.code(), e.getMessage());
         } catch (Exception | Error e) {
-            // Includes OutOfMemoryError: the worker must survive and the sheet must say FAILED.
+            // The worker must survive and the sheet must say FAILED.
             failure = e;
             outcome = SheetTif.failed(new ApiError.Body(ErrorCode.INTERNAL_ERROR.name(),
                     failureMessage(task.index(), e), Map.of("sheetIndex", task.index())));

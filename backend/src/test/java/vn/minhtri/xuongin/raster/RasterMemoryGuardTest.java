@@ -41,8 +41,10 @@ class RasterMemoryGuardTest {
                 .containsEntry("sheetIndex", 1);
         // At 300 DPI: (300 MB - 95.2 MB band) / (6732 x 3) = 10 861 rows = 919.6 mm -> 91 cm whole.
         assertThat(ex.details()).containsEntry("suggestedMaxLengthMm", 910.0);
-        assertThat(ex.getMessage()).contains("Tấm 2 (57 × 100 cm)", "300 DPI", "Hãy đặt DPI khoảng 280",
-                "giảm chiều dài tối đa mỗi file xuống 91 cm");
+        // Workers cannot change the server DPI: the length comes first, the DPI goes to the manager.
+        assertThat(ex.getMessage()).contains("Tấm 2 (57 × 100 cm)", "300 DPI",
+                "Hãy giảm chiều dài tối đa mỗi file xuống 91 cm", "báo người quản lý đặt DPI của máy chủ khoảng 280");
+        assertThat(ex.getMessage().indexOf("giảm chiều dài")).isLessThan(ex.getMessage().indexOf("DPI của máy chủ"));
     }
 
     @Test
@@ -59,7 +61,8 @@ class RasterMemoryGuardTest {
         RasterMemoryGuard guard = new RasterMemoryGuard(RasterProperties.defaults(), () -> MB);
         ApiException ex = catchThrowableOfType(() -> guard.check(0, 570, 1000, 300), ApiException.class);
         assertThat(ex.details()).doesNotContainKeys("suggestedDpi", "suggestedMaxLengthMm");
-        assertThat(ex.getMessage()).contains("Hãy giảm chiều dài tối đa mỗi file.");
+        assertThat(ex.getMessage()).contains("Hãy giảm chiều dài tối đa mỗi file rồi ghép lại.")
+                .doesNotContain("người quản lý");
     }
 
     @Test
@@ -77,5 +80,121 @@ class RasterMemoryGuardTest {
         RasterMemoryGuard guard = new RasterMemoryGuard(RasterProperties.defaults());
         assertThat(guard.allowedBytes()).isEqualTo((long) (Runtime.getRuntime().maxMemory() * 0.5));
         assertThat(guard.estimateBytes(10, 10)).isEqualTo(RasterMemoryGuard.estimateBytes(10, 10, 1024));
+    }
+
+    // ---- shared budget across concurrent builds ----
+
+    private static RasterMemoryGuard budget(long allowedMb) {
+        return new RasterMemoryGuard(RasterProperties.defaults(), () -> 2 * allowedMb * MB);
+    }
+
+    private static ApiException busy() {
+        return new ApiException(ErrorCode.JOB_NOT_READY, "bận");
+    }
+
+    @Test
+    void reservationsShareTheBudgetAndGiveItBack() {
+        RasterMemoryGuard guard = budget(100);
+        try (RasterMemoryGuard.Reservation a = guard.reserve(60 * MB, 1_000, RasterMemoryGuardTest::busy);
+                RasterMemoryGuard.Reservation b = guard.reserve(40 * MB, 1_000, RasterMemoryGuardTest::busy)) {
+            assertThat(guard.reservedBytes()).isEqualTo(100 * MB);
+            a.close();
+            a.close(); // closing twice gives back once
+            assertThat(guard.reservedBytes()).isEqualTo(40 * MB);
+            assertThat(b.bytes()).isEqualTo(40 * MB);
+        }
+        assertThat(guard.reservedBytes()).isZero();
+    }
+
+    @Test
+    void fullBudgetMakesTheNextBuildWaitThenGiveUp() {
+        RasterMemoryGuard guard = budget(100);
+        try (RasterMemoryGuard.Reservation tif = guard.reserve(80 * MB, 1_000, RasterMemoryGuardTest::busy)) {
+            long started = System.nanoTime();
+            ApiException ex = catchThrowableOfType(
+                    () -> guard.reserve(30 * MB, 100, RasterMemoryGuardTest::busy), ApiException.class);
+            assertThat(ex.code()).isEqualTo(ErrorCode.JOB_NOT_READY);
+            assertThat((System.nanoTime() - started) / 1_000_000).isGreaterThanOrEqualTo(90);
+            assertThat(guard.reservedBytes()).isEqualTo(80 * MB);
+        }
+    }
+
+    @Test
+    void oversizedReservationIsCutToTheBudgetAndRunsAlone() throws Exception {
+        RasterMemoryGuard guard = budget(100);
+        try (RasterMemoryGuard.Reservation photo = guard.reserve(700 * MB, 1_000, RasterMemoryGuardTest::busy)) {
+            assertThat(photo.bytes()).isEqualTo(100 * MB);
+            ApiException ex = catchThrowableOfType(
+                    () -> guard.reserve(1, 50, RasterMemoryGuardTest::busy), ApiException.class);
+            assertThat(ex.code()).isEqualTo(ErrorCode.JOB_NOT_READY);
+        }
+    }
+
+    @Test
+    void waiterProceedsWhenRoomIsFreedFirstComeFirstServed() throws Exception {
+        RasterMemoryGuard guard = budget(100);
+        java.util.List<String> order = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        RasterMemoryGuard.Reservation running = guard.reserve(90 * MB, 1_000, RasterMemoryGuardTest::busy);
+        Thread big = new Thread(() -> {
+            try (RasterMemoryGuard.Reservation r = guard.reserve(80 * MB, 5_000, RasterMemoryGuardTest::busy)) {
+                order.add("big");
+            }
+        });
+        big.start();
+        awaitWaiting(big);
+        // Would fit next to the running build, but the big one asked first.
+        Thread small = new Thread(() -> {
+            try (RasterMemoryGuard.Reservation r = guard.reserve(10 * MB, 5_000, RasterMemoryGuardTest::busy)) {
+                order.add("small");
+            }
+        });
+        small.start();
+        awaitWaiting(small);
+        assertThat(order).isEmpty();
+        running.close();
+        big.join(5_000);
+        small.join(5_000);
+        assertThat(order).containsExactly("big", "small");
+        assertThat(guard.reservedBytes()).isZero();
+    }
+
+    @Test
+    void interruptedWaitGivesUpAndKeepsTheFlag() throws Exception {
+        RasterMemoryGuard guard = budget(100);
+        java.util.concurrent.atomic.AtomicReference<Object> outcome = new java.util.concurrent.atomic.AtomicReference<>();
+        try (RasterMemoryGuard.Reservation running = guard.reserve(100 * MB, 1_000, RasterMemoryGuardTest::busy)) {
+            Thread waiter = new Thread(() -> {
+                try {
+                    guard.reserve(MB, 10_000, RasterMemoryGuardTest::busy);
+                } catch (ApiException e) {
+                    outcome.set(Thread.currentThread().isInterrupted() ? e.code() : "flag lost");
+                }
+            });
+            waiter.start();
+            awaitWaiting(waiter);
+            waiter.interrupt();
+            waiter.join(5_000);
+        }
+        assertThat(outcome.get()).isEqualTo(ErrorCode.JOB_NOT_READY);
+        // The abandoned ticket does not block the queue.
+        try (RasterMemoryGuard.Reservation next = guard.reserve(MB, 100, RasterMemoryGuardTest::busy)) {
+            assertThat(next.bytes()).isEqualTo(MB);
+        }
+    }
+
+    @Test
+    void outOfMemoryIsTiffTooLargeWithGuidance() {
+        ApiException ex = RasterMemoryGuard.outOfMemory(2, "cắt");
+        assertThat(ex.code()).isEqualTo(ErrorCode.TIFF_TOO_LARGE);
+        assertThat(ex.getMessage()).contains("file cắt tấm 3", "giảm chiều dài tối đa mỗi file", "báo người quản lý");
+        assertThat(ex.details()).containsEntry("sheetIndex", 2);
+    }
+
+    private static void awaitWaiting(Thread thread) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5_000;
+        while (thread.getState() != Thread.State.TIMED_WAITING && System.currentTimeMillis() < deadline) {
+            Thread.sleep(5);
+        }
+        assertThat(thread.getState()).isEqualTo(Thread.State.TIMED_WAITING);
     }
 }

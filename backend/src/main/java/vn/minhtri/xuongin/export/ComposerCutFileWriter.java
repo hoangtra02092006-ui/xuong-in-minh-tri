@@ -24,4 +24,9 @@ public class ComposerCutFileWriter implements CutFileWriter {
     public void write(Sheet sheet, Path sheetPdf, OutputStream out) throws IOException {
         composer.compose(sheet, id -> files.find(id).orElse(null), sheetPdf, out);
     }
+
+    @Override
+    public long estimateBytes(Sheet sheet) {
+        return composer.estimateBytes(sheet);
+    }
 }

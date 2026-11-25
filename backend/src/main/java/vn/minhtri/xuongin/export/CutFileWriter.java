@@ -17,4 +17,12 @@ public interface CutFileWriter {
      * @param out      receives the cut PDF; not closed
      */
     void write(Sheet sheet, Path sheetPdf, OutputStream out) throws IOException;
+
+    /**
+     * Peak heap bytes of {@link #write} without the source images, reserved in the shared raster
+     * budget before the build. May throw {@code TIFF_TOO_LARGE} when the sheet cannot be built.
+     */
+    default long estimateBytes(Sheet sheet) {
+        return 0;
+    }
 }

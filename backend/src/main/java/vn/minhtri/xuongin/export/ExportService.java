@@ -5,6 +5,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.slf4j.Logger;
@@ -13,6 +14,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import vn.minhtri.xuongin.job.Job;
 import vn.minhtri.xuongin.nesting.model.Sheet;
+import vn.minhtri.xuongin.raster.RasterMemoryGuard;
+import vn.minhtri.xuongin.raster.RasterProperties;
 import vn.minhtri.xuongin.shared.ApiException;
 import vn.minhtri.xuongin.shared.ErrorCode;
 
@@ -32,20 +35,27 @@ public class ExportService {
     private final TifPrebuildService tifs;
     private final ObjectProvider<CutFileWriter> cutWriter;
     private final ExportProperties properties;
+    private final RasterMemoryGuard guard;
+    private final SourceImageCost sourceImages;
+    private final long budgetWaitMs;
 
     public ExportService(ExportStore store, TifPrebuildService tifs, ObjectProvider<CutFileWriter> cutWriter,
-            ExportProperties properties) {
+            ExportProperties properties, RasterMemoryGuard guard, SourceImageCost sourceImages,
+            RasterProperties rasterProperties) {
         this.store = store;
         this.tifs = tifs;
         this.cutWriter = cutWriter;
         this.properties = properties;
+        this.guard = guard;
+        this.sourceImages = sourceImages;
+        this.budgetWaitMs = rasterProperties.budgetWaitMs();
     }
 
     /** The sheet's file on disk, built if needed. {@code job} must be DONE and {@code sheet} one of its sheets. */
     public Path file(Job job, Sheet sheet, ExportFormat format) {
         try {
             return switch (format) {
-                case PDF -> store.printPdf(job, sheet);
+                case PDF -> pdf(job, sheet);
                 case TIF -> tifs.await(job, sheet.index(), properties.waitTimeoutMs());
                 case CUT -> cut(job, sheet);
             };
@@ -62,12 +72,49 @@ public class ExportService {
         }
     }
 
+    /** Composing from images decodes them, so a sheet with images reserves its share of the raster budget. */
+    private Path pdf(Job job, Sheet sheet) throws IOException {
+        Path existing = store.printPdfPath(job, sheet);
+        if (Files.exists(existing)) {
+            return existing;
+        }
+        long need = sourceImages.of(sheet);
+        if (need == 0) {
+            return store.printPdf(job, sheet);
+        }
+        try (RasterMemoryGuard.Reservation ignored = guard.reserve(need, budgetWaitMs, () -> busy(sheet, "PDF"))) {
+            return store.printPdf(job, sheet);
+        } catch (OutOfMemoryError e) {
+            log.warn("PDF of job {} sheet {} ran out of memory", job.jobId(), sheet.index() + 1);
+            throw RasterMemoryGuard.outOfMemory(sheet.index(), "PDF");
+        }
+    }
+
+    /**
+     * Built on the request thread, so it shares the raster budget with the background TIF worker
+     * (spec 10.6): reserve the estimate, wait in line if needed, then compose and rasterize.
+     */
     private Path cut(Job job, Sheet sheet) throws IOException {
         checkAvailable(ExportFormat.CUT);
         CutFileWriter writer = cutWriter.getObject();
-        Path source = store.pdfWithoutCutLines(job, sheet);
-        return store.ensure(store.sheetFile(job.jobId(), sheet.index(), "-cat.pdf"),
-                out -> writer.write(sheet, source, out));
+        Path target = store.sheetFile(job.jobId(), sheet.index(), "-cat.pdf");
+        if (Files.exists(target)) {
+            return target;
+        }
+        long need = writer.estimateBytes(sheet) + sourceImages.of(sheet);
+        try (RasterMemoryGuard.Reservation ignored = guard.reserve(need, budgetWaitMs, () -> busy(sheet, "cắt"))) {
+            Path source = store.pdfWithoutCutLines(job, sheet);
+            return store.ensure(target, out -> writer.write(sheet, source, out));
+        } catch (OutOfMemoryError e) {
+            log.warn("Cut file of job {} sheet {} ran out of memory", job.jobId(), sheet.index() + 1);
+            throw RasterMemoryGuard.outOfMemory(sheet.index(), "cắt");
+        }
+    }
+
+    private static ApiException busy(Sheet sheet, String kind) {
+        return new ApiException(ErrorCode.JOB_NOT_READY, "Máy chủ đang bận dựng file khác nên chưa dựng được file "
+                + kind + " tấm " + (sheet.index() + 1) + ". Hãy thử lại sau ít phút.",
+                Map.of("sheetIndex", sheet.index()));
     }
 
     /**

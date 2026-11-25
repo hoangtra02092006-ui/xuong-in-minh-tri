@@ -29,6 +29,8 @@ import vn.minhtri.xuongin.nesting.model.NestItemRequest;
 import vn.minhtri.xuongin.nesting.model.NestRequest;
 import vn.minhtri.xuongin.nesting.model.NestResult;
 import vn.minhtri.xuongin.nesting.model.Sheet;
+import vn.minhtri.xuongin.raster.RasterMemoryGuard;
+import vn.minhtri.xuongin.raster.RasterProperties;
 import vn.minhtri.xuongin.shared.ApiException;
 import vn.minhtri.xuongin.shared.ErrorCode;
 import vn.minhtri.xuongin.storage.FileStore;
@@ -51,13 +53,103 @@ class ExportServiceTest {
         return Job.pending(JOB_ID, request).done(new NestResult(list, null));
     }
 
-    @SuppressWarnings("unchecked")
+    private static final long MB = 1L << 20;
+
     private ExportService service(PdfComposer composer, CutFileWriter cut) {
+        RasterProperties raster = RasterProperties.defaults();
+        return service(composer, cut, new RasterMemoryGuard(raster, () -> 1L << 30),
+                new SourceImageCost(mock(FileStore.class)), raster);
+    }
+
+    @SuppressWarnings("unchecked")
+    private ExportService service(PdfComposer composer, CutFileWriter cut, RasterMemoryGuard guard,
+            SourceImageCost images, RasterProperties raster) {
         ExportStore store = new ExportStore(dir, new InMemoryJobStore(), mock(FileStore.class), composer);
         ObjectProvider<CutFileWriter> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(cut);
         when(provider.getObject()).thenReturn(cut);
-        return new ExportService(store, mock(TifPrebuildService.class), provider, new ExportProperties(300, 1000));
+        return new ExportService(store, mock(TifPrebuildService.class), provider, new ExportProperties(300, 1000),
+                guard, images, raster);
+    }
+
+    /** Cut writer that reports {@code estimate} and records the budget in use while it writes. */
+    private static CutFileWriter cutWriter(long estimate, RasterMemoryGuard guard, List<Long> seen) {
+        return new CutFileWriter() {
+            @Override
+            public void write(Sheet sheet, Path sheetPdf, OutputStream out) throws IOException {
+                seen.add(guard.reservedBytes());
+                out.write('x');
+            }
+
+            @Override
+            public long estimateBytes(Sheet sheet) {
+                return estimate;
+            }
+        };
+    }
+
+    @Test
+    void cutReservesItsEstimatePlusSourceImagesAndWaitsWhenTheBudgetIsFull() throws Exception {
+        // Budget 100 MB, cut-file wait 100 ms.
+        RasterProperties raster = new RasterProperties(null, null, null, null, null, 100L);
+        RasterMemoryGuard guard = new RasterMemoryGuard(raster, () -> 200 * MB);
+        SourceImageCost images = mock(SourceImageCost.class);
+        when(images.of(any())).thenReturn(10 * MB);
+        List<Long> seen = new java.util.ArrayList<>();
+        ExportService service = service(mock(PdfComposer.class), cutWriter(60 * MB, guard, seen), guard, images, raster);
+        Job job = job(1);
+        Sheet sheet = job.result().sheets().get(0);
+
+        try (RasterMemoryGuard.Reservation tif = guard.reserve(50 * MB, 100, () -> null)) {
+            assertThatThrownBy(() -> service.file(job, sheet, ExportFormat.CUT))
+                    .isInstanceOfSatisfying(ApiException.class, e -> {
+                        assertThat(e.code()).isEqualTo(ErrorCode.JOB_NOT_READY);
+                        assertThat(e.getMessage()).contains("đang bận", "file cắt tấm 1");
+                    });
+        }
+        Path file = service.file(job, sheet, ExportFormat.CUT);
+        assertThat(seen).containsExactly(70 * MB);
+        assertThat(guard.reservedBytes()).isZero();
+        // Already built: no new reservation, no new build.
+        assertThat(service.file(job, sheet, ExportFormat.CUT)).isEqualTo(file);
+        assertThat(seen).hasSize(1);
+    }
+
+    @Test
+    void outOfMemoryInACutBuildIsTiffTooLarge() {
+        CutFileWriter oom = (sheet, pdf, out) -> {
+            throw new OutOfMemoryError("Java heap space");
+        };
+        Job job = job(1);
+        assertThatThrownBy(() -> service(mock(PdfComposer.class), oom).file(job, job.result().sheets().get(0),
+                ExportFormat.CUT))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.TIFF_TOO_LARGE));
+    }
+
+    @Test
+    void pdfWithImagesIsComposedInsideAReservation() throws Exception {
+        RasterProperties raster = RasterProperties.defaults();
+        RasterMemoryGuard guard = new RasterMemoryGuard(raster, () -> 1L << 30);
+        SourceImageCost images = mock(SourceImageCost.class);
+        when(images.of(any())).thenReturn(10 * MB);
+        PdfComposer composer = mock(PdfComposer.class);
+        List<Long> seen = new java.util.ArrayList<>();
+        doAnswer(inv -> {
+            seen.add(guard.reservedBytes());
+            return null;
+        }).when(composer).compose(any(), any(), any(), anyBoolean(), any());
+        Job job = job(2);
+        ExportService service = service(composer, null, guard, images, raster);
+        service.file(job, job.result().sheets().get(0), ExportFormat.PDF);
+        service.file(job, job.result().sheets().get(0), ExportFormat.PDF);
+        assertThat(seen).containsExactly(10 * MB);
+
+        doAnswer(inv -> {
+            throw new OutOfMemoryError("Java heap space");
+        }).when(composer).compose(any(), any(), any(), anyBoolean(), any());
+        assertThatThrownBy(() -> service.file(job, job.result().sheets().get(1), ExportFormat.PDF))
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.code()).isEqualTo(ErrorCode.TIFF_TOO_LARGE));
+        assertThat(guard.reservedBytes()).isZero();
     }
 
     @Test
