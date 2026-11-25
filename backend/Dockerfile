@@ -11,7 +11,8 @@ RUN ./mvnw -B -q package -DskipTests
 FROM eclipse-temurin:21-jre
 WORKDIR /app
 RUN command -v wget >/dev/null || (apt-get update && apt-get install -y --no-install-recommends wget && rm -rf /var/lib/apt/lists/*)
-RUN useradd --system --create-home xuongin && mkdir -p /app/storage && chown xuongin /app/storage
+# Fixed uid 999: the deploy bind mount (deploy/data) must be chown 999:999 on the host.
+RUN useradd --system --uid 999 --create-home xuongin && mkdir -p /app/storage && chown xuongin /app/storage
 COPY --from=build /build/target/xuong-in-backend-*.jar app.jar
 USER xuongin
 ENV APP_STORAGE_PATH=/app/storage

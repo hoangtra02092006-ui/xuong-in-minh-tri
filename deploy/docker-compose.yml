@@ -17,6 +17,7 @@ services:
     ports:
       - "127.0.0.1:8095:8080"
     volumes:
+      # Host dir must be owned by uid 999 (the container user): mkdir -p data && chown 999:999 data
       - ./data:/app/storage
       # Hồ sơ màu Adobe nằm ngoài repo (ADR-004), chép tay lên máy chủ một lần.
       - /opt/xuong-in/color/USWebCoatedSWOP.icc:/app/color/USWebCoatedSWOP.icc:ro
