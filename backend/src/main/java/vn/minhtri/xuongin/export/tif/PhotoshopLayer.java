@@ -18,7 +18,8 @@ import java.util.zip.DeflaterOutputStream;
  *
  * <pre>
  *   "Adobe Photoshop Document Data Block\0" "8BIM" "Layr" length layerCount=1
- *   layer record: bounds (0,0)-(height,width), 5 channels -1 (transparency), 0 C, 1 M, 2 Y, 3 K,
+ *   layer record: bounds (0,0)-(height,width), channels -1 (transparency), then 0 C, 1 M, 2 Y, 3 K
+ *                 (CMYK) or 0 R, 1 G, 2 B (RGB),
  *                 "8BIM" "norm", opacity 255, flags 0x08, name "Layer 1"
  *   channel data in the same order, each prefixed by its compression (1 RLE, 2 ZIP)
  * </pre>
@@ -31,11 +32,11 @@ final class PhotoshopLayer implements Closeable {
 
     static final String SIGNATURE = "Adobe Photoshop Document Data Block";
     static final String LAYER_NAME = "Layer 1";
+    /** CMYK layer: transparency + 4 colours. */
     static final int CHANNELS = 5;
     static final int COMPRESSION_RLE = 1;
     static final int COMPRESSION_ZIP = 2;
 
-    private static final int CMYK = 4;
     private static final short TRANSPARENCY_ID = -1;
     private static final int OPACITY = 255;
     /** Bit 3: "Photoshop 5.0 and later", read from the reference file. Visible, unlocked. */
@@ -48,18 +49,34 @@ final class PhotoshopLayer implements Closeable {
     private final int width;
     private final int height;
     private final boolean zip;
-    private final Channel[] channels = new Channel[CHANNELS];
+    private final int colours;
+    private final boolean inverted;
+    private final Channel[] channels;
     private final byte[] row;
     private final ByteArrayOutputStream packed = new ByteArrayOutputStream();
     private int rows;
 
+    /** CMYK layer (colour channels stored inverted). */
     PhotoshopLayer(Path tempDir, int width, int height, boolean zip) throws IOException {
+        this(tempDir, width, height, zip, 4, true);
+    }
+
+    /**
+     * @param colours  colour channels per pixel in the rows fed to {@link #addRow}: 4 CMYK, 3 RGB
+     * @param inverted store colours as {@code 255 − value}: true for CMYK (PSD: 0 = full ink),
+     *                 false for RGB (PSD stores RGB as is)
+     */
+    PhotoshopLayer(Path tempDir, int width, int height, boolean zip, int colours, boolean inverted)
+            throws IOException {
         this.width = width;
         this.height = height;
         this.zip = zip;
+        this.colours = colours;
+        this.inverted = inverted;
+        this.channels = new Channel[colours + 1];
         this.row = new byte[width];
         try {
-            for (int c = 0; c < CHANNELS; c++) {
+            for (int c = 0; c < channels.length; c++) {
                 channels[c] = new Channel(Files.createTempFile(tempDir, ".tif-layer-", ".tmp"), zip, height);
             }
         } catch (IOException | RuntimeException e) {
@@ -74,14 +91,15 @@ final class PhotoshopLayer implements Closeable {
      * (PSD: 0 = full ink); storing them as-is turns cream into solid black in Photoshop while the
      * composite still looks right to numeric tests.
      */
-    void addRow(byte[] cmyk, int cmykOffset, byte[] mask, int maskOffset) throws IOException {
+    void addRow(byte[] colour, int colourOffset, byte[] mask, int maskOffset) throws IOException {
         for (int x = 0; x < width; x++) {
             row[x] = mask[maskOffset + x] != 0 ? (byte) 0xFF : 0;
         }
         channels[0].write(row);
-        for (int c = 0; c < CMYK; c++) {
-            for (int x = 0, at = cmykOffset + c; x < width; x++, at += CMYK) {
-                row[x] = (byte) (255 - (cmyk[at] & 0xFF));
+        int flip = inverted ? 0xFF : 0;
+        for (int c = 0; c < colours; c++) {
+            for (int x = 0, at = colourOffset + c; x < width; x++, at += colours) {
+                row[x] = (byte) ((colour[at] & 0xFF) ^ flip);
             }
             channels[c + 1].write(row);
         }
@@ -93,9 +111,9 @@ final class PhotoshopLayer implements Closeable {
         if (rows != height) {
             throw new IllegalStateException("layer needs " + height + " rows, got " + rows);
         }
-        long[] lengths = new long[CHANNELS];
+        long[] lengths = new long[channels.length];
         long data = 0;
-        for (int c = 0; c < CHANNELS; c++) {
+        for (int c = 0; c < channels.length; c++) {
             channels[c].finish();
             lengths[c] = channels[c].length();
             data += lengths[c];
@@ -130,8 +148,8 @@ final class PhotoshopLayer implements Closeable {
     private byte[] record(long[] lengths) {
         ByteBuffer b = ByteBuffer.allocate(256);
         b.putInt(0).putInt(0).putInt(height).putInt(width);
-        b.putShort((short) CHANNELS);
-        for (int c = 0; c < CHANNELS; c++) {
+        b.putShort((short) channels.length);
+        for (int c = 0; c < channels.length; c++) {
             b.putShort(c == 0 ? TRANSPARENCY_ID : (short) (c - 1));
             b.putInt((int) lengths[c]);
         }
