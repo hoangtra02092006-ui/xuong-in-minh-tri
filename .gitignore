@@ -38,3 +38,6 @@ samples/IN6*.tif
 # Deploy runtime files on the server
 deploy/.env
 deploy/data/
+
+# Local test files on the manager machine
+local/
