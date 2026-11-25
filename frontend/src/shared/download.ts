@@ -20,3 +20,27 @@ export function openDownload(url: string): void {
   a.click()
   a.remove()
 }
+
+/**
+ * Starts a download without opening a tab, for code that runs outside a click (a TIF that
+ * became READY while polling). A new tab there is a popup and Chrome blocks it; a link without
+ * `target` is not. The server answers with `Content-Disposition: attachment` (spec 6.5), so the
+ * page stays put even when `download` is ignored cross-origin. Returns false when it could not
+ * even try (no DOM), so the caller can offer a button instead.
+ */
+export function startDownload(url: string): boolean {
+  if (typeof document === 'undefined' || !document.body) return false
+  const a = document.createElement('a')
+  a.href = url
+  a.download = ''
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  try {
+    a.click()
+    return true
+  } catch {
+    return false
+  } finally {
+    a.remove()
+  }
+}

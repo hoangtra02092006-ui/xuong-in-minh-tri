@@ -4,7 +4,14 @@ import { http } from '@/api/http'
 import { blobErrorToApiError, createRealApi } from '@/api/real'
 import { fallbackFileName, fileNameFromDisposition } from '@/api/service'
 import type { Placement } from '@/api/types'
-import { pieceShape, rotationText, ticks } from '@/shared/layout-geometry'
+import {
+  LABEL_CHAR_EM,
+  LABEL_MIN_FONT_MM,
+  labelFontSize,
+  pieceShape,
+  rotationText,
+  ticks,
+} from '@/shared/layout-geometry'
 import { readJson, removeKey, writeJson } from '@/shared/storage'
 import { dismissToast, showToast, TOAST_MS, toast, useToasts } from '@/shared/toast'
 import {
@@ -173,6 +180,21 @@ describe('layout preview geometry', () => {
 
   it('small pieces get no label', () => {
     expect(pieceShape({ ...p, wMm: 40, hMm: 20 }, 1000, 'x').label).toBeNull()
+  })
+
+  it('label shrinks to fit its piece (review: "5,08x3,39" overflowed a 50,8 x 33,9 mm piece)', () => {
+    const text = '5,08x3,39'
+    const s = pieceShape({ ...p, wMm: 50.8, hMm: 33.9, sourceWMm: 50.8, sourceHMm: 33.9 }, 1000, text)
+    expect(s.label).toBe(text)
+    expect(s.fontSize * text.length * LABEL_CHAR_EM).toBeLessThan(50.8)
+    expect(s.fontSize).toBeGreaterThanOrEqual(LABEL_MIN_FONT_MM)
+  })
+
+  it('label is hidden when it would be unreadably small (the tooltip still shows it)', () => {
+    const s = pieceShape({ ...p, wMm: 46, hMm: 23, sourceWMm: 46, sourceHMm: 23 }, 1000, '123,45x678,90')
+    expect(s.label).toBeNull()
+    expect(labelFontSize('5x3', 1, 1)).toBeNull()
+    expect(labelFontSize('20x18', 200, 180)).toBe(16)
   })
 
   it('ruler ticks every 10 cm; the vertical one counts from the bottom', () => {
