@@ -10,6 +10,7 @@ RUN ./mvnw -B -q package -DskipTests
 # Stage 2: run on a small JRE image as a non-root user
 FROM eclipse-temurin:21-jre
 WORKDIR /app
+RUN command -v wget >/dev/null || (apt-get update && apt-get install -y --no-install-recommends wget && rm -rf /var/lib/apt/lists/*)
 RUN useradd --system --create-home xuongin && mkdir -p /app/storage && chown xuongin /app/storage
 COPY --from=build /build/target/xuong-in-backend-*.jar app.jar
 USER xuongin

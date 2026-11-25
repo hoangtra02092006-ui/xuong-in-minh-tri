@@ -1,0 +1,35 @@
+# Backend Xưởng in Minh Trí trên máy chủ Tino (dùng chung với n8n).
+# Chạy từ thư mục deploy/:  docker compose up -d --build
+# Chỉ đụng container "xuong-in-backend"; không dừng hay sửa container khác.
+name: xuong-in
+
+services:
+  backend:
+    container_name: xuong-in-backend
+    build: ../backend
+    image: xuong-in-backend:${APP_VERSION:-latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      APP_STORAGE_PATH: /app/storage
+      APP_TIFF_CMYK_PROFILE: /app/color/USWebCoatedSWOP.icc
+    # Chỉ mở cổng cho nginx trên chính máy chủ, không ra internet.
+    ports:
+      - "127.0.0.1:8095:8080"
+    volumes:
+      - ./data:/app/storage
+      # Hồ sơ màu Adobe nằm ngoài repo (ADR-004), chép tay lên máy chủ một lần.
+      - /opt/xuong-in/color/USWebCoatedSWOP.icc:/app/color/USWebCoatedSWOP.icc:ro
+    # Trần RAM đã chốt với người quản lý: 1,5 GB (heap ~60% = ~900 MB, xem Dockerfile).
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    cpus: 2
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/v1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

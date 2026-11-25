@@ -34,3 +34,7 @@ Thumbs.db
 *.icc
 samples/IN6*.tif
 .claude/worktrees/
+
+# Deploy runtime files on the server
+deploy/.env
+deploy/data/
