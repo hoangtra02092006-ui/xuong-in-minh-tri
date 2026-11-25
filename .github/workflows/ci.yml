@@ -21,6 +21,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 21, cache: maven }
+      # Maven Central sometimes answers 429 to the wrapper download: cache the
+      # distribution and retry with backoff instead of failing the PR.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/wrapper
+          key: mvnw-${{ hashFiles('backend/.mvn/wrapper/maven-wrapper.properties') }}
+      - name: Download Maven via wrapper (retry on 429)
+        run: |
+          for i in 1 2 3 4; do
+            ./mvnw -B -q --version && exit 0
+            echo "Wrapper download failed, retry $i in $((i * 15)) s"
+            sleep $((i * 15))
+          done
+          exit 1
       - run: ./mvnw -B verify
-        env:
-          MVNW_VERBOSE: true
