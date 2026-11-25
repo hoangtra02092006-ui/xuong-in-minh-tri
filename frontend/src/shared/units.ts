@@ -45,6 +45,60 @@ export function formatInt(value: number): string {
   return viInt.format(Math.round(value))
 }
 
+/** PDF points to mm (1 pt = 1/72 inch), rounded to 0.01 mm. */
+export function ptToMm(pt: number): number {
+  return roundMm((pt * 25.4) / 72)
+}
+
+/** Pixels at a given DPI to mm, rounded to 0.01 mm (browser images use 96 DPI). */
+export function pxToMm(px: number, dpi = 96): number {
+  return roundMm((px * 25.4) / dpi)
+}
+
+/** Rounds a length to 0.01 mm, the API precision. */
+export function roundMm(mm: number): number {
+  return Math.round(mm * 100) / 100
+}
+
+/** Engine unit: 1/100 mm integers (demo layout mirrors the backend so sums never drift). */
+export const CMM_PER_MM = 100
+
+export function mmToCmm(mm: number): number {
+  return Math.round(mm * CMM_PER_MM)
+}
+
+export function cmmToMm(cmm: number): number {
+  return Math.round(cmm) / CMM_PER_MM
+}
+
+/** Square cm from square mm. */
+export function mm2ToCm2(mm2: number): number {
+  return mm2 / 100
+}
+
+/** Area in cm² with thousands separator: "2.520". */
+export function formatAreaCm2(mm2: number): string {
+  return formatInt(mm2ToCm2(mm2))
+}
+
+/** "W x H cm" label used across tables, captions and tooltips. */
+export function formatSizeCm(widthMm: number, heightMm: number): string {
+  return `${formatCm(widthMm)} x ${formatCm(heightMm)} cm`
+}
+
+/** cm with a fixed number of decimals (byType length "341,6"). */
+export function formatCmFixed(mm: number, decimals: number): string {
+  return new Intl.NumberFormat('vi-VN', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(mmToCm(mm))
+}
+
+/** cm for a text input: no grouping so it parses back ("1200,5"). */
+export function cmInputValue(mm: number): string {
+  return new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2, useGrouping: false }).format(mmToCm(mm))
+}
+
 /** File size for download buttons: "5,2 MB". */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${formatInt(Math.max(1, bytes / 1024))} KB`
