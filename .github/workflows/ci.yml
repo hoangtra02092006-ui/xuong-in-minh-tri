@@ -45,7 +45,9 @@ jobs:
       - run: docker build -t xuong-in-backend:ci backend
       - name: Start container with the production memory limit
         run: |
-          docker run -d --name xi -m 1536m -p 127.0.0.1:8095:8080 xuong-in-backend:ci
+          # Same bind mount as deploy/docker-compose.yml, prepared the way the release doc says.
+          mkdir -p data && sudo chown 999:999 data
+          docker run -d --name xi -m 1536m -p 127.0.0.1:8095:8080 -v "$PWD/data:/app/storage" xuong-in-backend:ci
           for i in $(seq 1 30); do
             if curl -fs http://127.0.0.1:8095/api/v1/health; then echo; exit 0; fi
             sleep 3
@@ -53,3 +55,8 @@ jobs:
           docker logs xi
           exit 1
       - run: docker exec xi sh -c 'command -v wget'
+      - name: Upload a sample file (storage must be writable)
+        run: |
+          code=$(curl -s -o out.json -w '%{http_code}' -F files=@samples/nhan-16x13.pdf http://127.0.0.1:8095/api/v1/files)
+          cat out.json; echo
+          test "$code" = 200 || { docker logs xi | tail -40; exit 1; }
