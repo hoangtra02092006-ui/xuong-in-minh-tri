@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive } from 'vue'
 import type { NestStats, TypeStats } from '@/api/types'
+import { apportion, CM_COLUMN_UNIT_MM, M_COLUMN_UNIT_MM } from '@/shared/apportion'
 import { categoryColor } from '@/shared/category-colors'
 import { formatAreaCm2, formatCm, formatCmFixed, formatInt, formatM, formatSizeCm } from '@/shared/units'
 import { getApi } from '@/stores/api-provider'
@@ -10,13 +11,25 @@ const broken = reactive(new Set<string>())
 
 const rows = computed(() => [...props.stats.byType].sort((a, b) => a.categoryIndex - b.categoryIndex))
 const totals = computed(() =>
-  rows.value.reduce(
-    (t, r) => ({ pieces: t.pieces + r.pieces, area: t.area + r.shapeAreaMm2, length: t.length + r.lengthMm }),
-    { pieces: 0, area: 0, length: 0 },
-  ),
+  rows.value.reduce((t, r) => ({ pieces: t.pieces + r.pieces, area: t.area + r.shapeAreaMm2 }), {
+    pieces: 0,
+    area: 0,
+  }),
 )
-const caption = (r: TypeStats) =>
-  `${formatSizeCm(r.widthMm, r.heightMm)} · ${formatInt(r.pieces)} bản · ${formatM(r.lengthMm)} m`
+/** Lengths shown per column: rows add up exactly to the Total row, no design shows 0 (invariant 11). */
+function shown(unitMm: number) {
+  const r = rows.value
+  const { units, total } = apportion(
+    r.map((x) => x.lengthMm),
+    unitMm,
+    r.map((x) => x.pieces > 0),
+  )
+  return { rows: units.map((u) => u * unitMm), total: total * unitMm }
+}
+const cmCol = computed(() => shown(CM_COLUMN_UNIT_MM))
+const mCol = computed(() => shown(M_COLUMN_UNIT_MM))
+const caption = (r: TypeStats, i: number) =>
+  `${formatSizeCm(r.widthMm, r.heightMm)} · ${formatInt(r.pieces)} bản · ${formatM(mCol.value.rows[i])} m`
 </script>
 
 <template>
@@ -34,13 +47,13 @@ const caption = (r: TypeStats) =>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="r in rows" :key="r.fileId + r.categoryIndex">
+        <tr v-for="(r, i) in rows" :key="r.fileId + r.categoryIndex">
           <td class="c-thumb">
-            <span class="thumb" :title="caption(r)">
+            <span class="thumb" :title="caption(r, i)">
               <img
                 v-if="!broken.has(r.fileId)"
                 :src="getApi().getPreviewUrl(r.fileId)"
-                :alt="caption(r)"
+                :alt="caption(r, i)"
                 width="36"
                 height="36"
                 loading="lazy"
@@ -57,8 +70,8 @@ const caption = (r: TypeStats) =>
           </td>
           <td class="num" data-label="Số bản">{{ formatInt(r.pieces) }}</td>
           <td class="num" data-label="Diện tích (cm²)">{{ formatAreaCm2(r.shapeAreaMm2) }}</td>
-          <td class="num" data-label="Chiều dài (cm)">{{ formatCmFixed(r.lengthMm, 1) }}</td>
-          <td class="num strong" data-label="Chiều dài (m)">{{ formatM(r.lengthMm) }}</td>
+          <td class="num" data-label="Chiều dài (cm)">{{ formatCmFixed(cmCol.rows[i], 1) }}</td>
+          <td class="num strong" data-label="Chiều dài (m)">{{ formatM(mCol.rows[i]) }}</td>
         </tr>
       </tbody>
       <tfoot>
@@ -68,8 +81,8 @@ const caption = (r: TypeStats) =>
           <td class="c-empty" />
           <td class="num" data-label="Số bản">{{ formatInt(totals.pieces) }}</td>
           <td class="num" data-label="Diện tích (cm²)">{{ formatAreaCm2(totals.area) }}</td>
-          <td class="num" data-label="Chiều dài (cm)">{{ formatCmFixed(totals.length, 1) }}</td>
-          <td class="num" data-label="Chiều dài (m)">{{ formatM(totals.length) }}</td>
+          <td class="num" data-label="Chiều dài (cm)">{{ formatCmFixed(cmCol.total, 1) }}</td>
+          <td class="num" data-label="Chiều dài (m)">{{ formatM(mCol.total) }}</td>
         </tr>
       </tfoot>
     </table>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { dismissToast, useToasts } from '../toast'
+import { dismissToast, runToastAction, useToasts } from '../toast'
 import AppIcon from './AppIcon.vue'
 
 const toasts = useToasts()
@@ -17,7 +17,13 @@ const ICON = { success: 'check', error: 'alert', info: 'info' } as const
         :role="t.kind === 'error' ? 'alert' : 'status'"
       >
         <AppIcon :name="ICON[t.kind]" :size="18" class="toast__icon" />
-        <p class="toast__text">{{ t.text }}</p>
+        <div class="toast__body">
+          <p class="toast__text">{{ t.text }}</p>
+          <button v-if="t.action" type="button" class="toast__action" @click="runToastAction(t.id)">
+            <AppIcon name="download" :size="15" />
+            {{ t.action.label }}
+          </button>
+        </div>
         <button type="button" class="toast__close" aria-label="Đóng thông báo" @click="dismissToast(t.id)">
           <AppIcon name="x" :size="16" />
         </button>
@@ -73,10 +79,38 @@ const ICON = { success: 'check', error: 'alert', info: 'info' } as const
   color: var(--color-danger);
 }
 
-.toast__text {
+.toast__body {
   flex: 1;
   min-width: 0;
+}
+
+.toast__text {
   overflow-wrap: anywhere;
+}
+
+.toast__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  margin-top: var(--space-2);
+  padding: 0 var(--space-3);
+  border: 1px solid #c3dfda;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+}
+
+.toast__action:hover {
+  background: #d8ebe7;
+  border-color: var(--color-primary);
 }
 
 .toast__close {
