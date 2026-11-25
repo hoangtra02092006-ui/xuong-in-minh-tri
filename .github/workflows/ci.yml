@@ -22,3 +22,5 @@ jobs:
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 21, cache: maven }
       - run: ./mvnw -B verify
+        env:
+          MVNW_VERBOSE: true
