@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
 import { ApiError, toApiError } from '@/api/errors'
 import type { NestJob, NestRequest, Sheet } from '@/api/types'
-import { openDownload } from '@/shared/download'
+import { openDownload, startDownload } from '@/shared/download'
 import { readJson, removeKey, session, writeJson } from '@/shared/storage'
 import { DEMO_DOWNLOAD_MESSAGE, toast } from '@/shared/toast'
 import { getApi } from './api-provider'
@@ -76,10 +76,36 @@ export const useJobStore = defineStore('job', () => {
     return null
   }
 
+  /** Click on a READY sheet: we are inside the user's gesture, a new tab is fine (spec 5.6 c). */
   function deliverTif(index: number): void {
     const api = getApi()
     if (api.isDemo) toast.info(DEMO_DOWNLOAD_MESSAGE)
     else if (job.value) openDownload(api.sheetDownloadUrl(job.value.jobId, index, 'tif'))
+  }
+
+  /**
+   * A sheet the user asked for became READY during polling: no gesture any more, so a new tab
+   * would be a blocked popup. Download in place, and keep a button in a toast in case the
+   * browser still refuses (we cannot see a silent block).
+   */
+  function autoDeliverTif(index: number): void {
+    const api = getApi()
+    if (api.isDemo) {
+      toast.info(DEMO_DOWNLOAD_MESSAGE)
+      return
+    }
+    if (!job.value) return
+    const url = api.sheetDownloadUrl(job.value.jobId, index, 'tif')
+    const action = { label: `Tải TIF tấm ${index + 1}`, run: () => openDownload(url) }
+    if (startDownload(url)) {
+      toast.action(
+        'success',
+        `Tấm ${index + 1}: TIF đã xong, đang tải về. Không thấy file thì bấm nút.`,
+        action,
+      )
+    } else {
+      toast.action('info', `Tấm ${index + 1}: TIF đã xong. Bấm nút để tải.`, action)
+    }
   }
 
   function applyJob(next: NestJob): void {
@@ -88,7 +114,7 @@ export const useJobStore = defineStore('job', () => {
     const waiting: number[] = []
     for (const index of autoDownload.value) {
       const status = sheets[index]?.tif.status
-      if (status === 'READY') deliverTif(index)
+      if (status === 'READY') autoDeliverTif(index)
       else if (status === 'FAILED')
         toast.error(`Tấm ${index + 1}: ${sheets[index].tif.error?.message ?? 'Lỗi dựng TIF.'}`)
       else waiting.push(index)

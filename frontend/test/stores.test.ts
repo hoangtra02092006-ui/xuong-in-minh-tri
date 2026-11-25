@@ -5,7 +5,8 @@ import { createMockApi } from '@/api/mock'
 import { RUN_MS, TIF_BUILD_MS } from '@/api/mock/jobs'
 import type { ApiService } from '@/api/service'
 import type { NestJob } from '@/api/types'
-import { useToasts } from '@/shared/toast'
+import { startDownload } from '@/shared/download'
+import { runToastAction, useToasts } from '@/shared/toast'
 import { setApi } from '@/stores/api-provider'
 import { JOB_POLL_MS, LOCAL_ERROR_ID, TIF_POLL_MS, tifProgressOf, useJobStore } from '@/stores/job'
 import { ORDER_STORAGE_KEY, useOrderStore } from '@/stores/order'
@@ -238,6 +239,63 @@ describe('job store', () => {
     useToasts().items.splice(0)
     await store.requestTif(last)
     expect(useToasts().items).toHaveLength(1)
+  })
+
+  function realishApi(): ApiService {
+    return {
+      ...demoApi(),
+      isDemo: false,
+      sheetDownloadUrl: (id, i, f) => `https://api.test/jobs/${id}/sheets/${i}/${f}`,
+    }
+  }
+
+  async function tifBecomesReady(api: ApiService) {
+    const store = useJobStore()
+    await store.submit(await uploadAndRequest(api, ['nhan-20x18.pdf'], 30))
+    await vi.advanceTimersByTimeAsync(RUN_MS + JOB_POLL_MS)
+    const last = store.job!.result!.sheets.length - 1
+    await store.requestTif(last)
+    await vi.advanceTimersByTimeAsync(TIF_BUILD_MS * 2 + TIF_POLL_MS * 2)
+    return { last, url: `https://api.test/jobs/${store.job!.jobId}/sheets/${last}/tif` }
+  }
+
+  it('auto download after READY is not a popup and keeps a toast button as fallback', async () => {
+    const api = realishApi()
+    setApi(api)
+    const clicks: { href: string; target: string; download: boolean }[] = []
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicks.push({ href: this.href, target: this.target, download: this.hasAttribute('download') })
+    })
+    const { last, url } = await tifBecomesReady(api)
+
+    // Same tab, download attribute, no target=_blank: Chrome's popup blocker does not apply.
+    expect(clicks).toEqual([{ href: url, target: '', download: true }])
+    expect(document.querySelectorAll('a[download]')).toHaveLength(0)
+    const t = useToasts().items.at(-1)!
+    expect(t.kind).toBe('success')
+    expect(t.action?.label).toBe(`Tải TIF tấm ${last + 1}`)
+
+    // The fallback button is a user gesture, so it may open the link normally.
+    runToastAction(t.id)
+    expect(clicks.at(-1)).toMatchObject({ href: url, target: '_blank' })
+    expect(useToasts().items.find((x) => x.id === t.id)).toBeUndefined()
+    click.mockRestore()
+  })
+
+  it('auto download that cannot start leaves a "Tải TIF tấm N" toast', async () => {
+    const api = realishApi()
+    setApi(api)
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {
+      throw new Error('blocked')
+    })
+    expect(startDownload('https://api.test/x.tif')).toBe(false)
+    const { last } = await tifBecomesReady(api)
+    const t = useToasts().items.at(-1)!
+    expect(t.kind).toBe('info')
+    expect(t.action?.label).toBe(`Tải TIF tấm ${last + 1}`)
+    click.mockRestore()
   })
 
   it('requestTif error shows a toast and clears the auto download', async () => {
