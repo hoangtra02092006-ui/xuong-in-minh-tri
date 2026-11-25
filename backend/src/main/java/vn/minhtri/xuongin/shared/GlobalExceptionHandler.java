@@ -9,6 +9,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -33,6 +34,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     ResponseEntity<ApiError> handleUnreadable(HttpMessageNotReadableException e) {
         return body(ErrorCode.INVALID_REQUEST, "Dữ liệu gửi lên không đúng định dạng.", Map.of());
+    }
+
+    /** e.g. a sheet index that is not a number in {@code /sheets/abc/pdf}. */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    ResponseEntity<ApiError> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+        return body(ErrorCode.INVALID_REQUEST, "Tham số \"" + e.getName() + "\" không hợp lệ.", Map.of());
     }
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)
