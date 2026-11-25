@@ -16,7 +16,7 @@ coverage/
 
 # Backend storage
 backend/storage/
-storage/
+/storage/
 
 # IDE (keep shared VS Code settings)
 .idea/
