@@ -9,14 +9,14 @@ import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.List;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
-import org.apache.pdfbox.pdmodel.font.PDType1Font;
-import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
+import org.apache.pdfbox.pdmodel.font.PDType0Font;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -39,6 +39,9 @@ class CutComposerTest {
     private static final double PX_MM = 25.4 / 300;
 
     private static final long TWO_GB = 2L << 30;
+
+    /** Ships inside the PDFBox jar, so every OS renders the same glyphs. */
+    private static final String EMBEDDED_FONT = "/org/apache/pdfbox/resources/ttf/LiberationSans-Regular.ttf";
 
     @TempDir
     Path tmp;
@@ -126,11 +129,12 @@ class CutComposerTest {
 
     @Test
     void smallTextKeepsEveryLetter() throws IOException {
-        // 7 pt caps (cap height ~1.8 mm, strokes ~0.25 mm = 3 px): the case where the old
-        // choked mask broke "NGUYÊN BẢN TRÀ VIỆT" into specks. 16 separate capital letters;
+        // 7 pt caps (cap height ~1.8 mm, strokes ~0.2 mm = 2-3 px): the case where the old
+        // choked mask broke "NGUYÊN BẢN TRÀ VIỆT" into specks. 16 separate capital letters
+        // (1 pt = 4 px apart, so they never touch whatever the anti-aliasing);
         // counters: B has 2, A, R, A one each = 5. The smallest counters may fall under the
         // 0.2 mm² dust floor (the letter is still cut around), but none may disappear silently.
-        fx.pdf("t", textPdf("t", 60, 6, 7, "NGUYEN BAN TRA VIET"), 60, 6);
+        fx.pdf("t", textPdf("t", 60, 6, 7, 1f, "NGUYEN BAN TRA VIET"), 60, 6);
         Result cut = compose(300, 100, false, List.of(fx.place("t", 80, 40, false)), CutProperties.defaults());
         assertThat(cut.result.outerContours()).isEqualTo(16);
         assertThat(cut.result.holeContours() + cut.result.droppedSpecks()).isEqualTo(5);
@@ -390,8 +394,18 @@ class CutComposerTest {
         return out;
     }
 
-    /** Black Helvetica-Bold text on a transparent page of {@code w × h} mm. */
+    /**
+     * Black text on a transparent page of {@code w × h} mm, in the Liberation Sans that ships inside
+     * PDFBox, EMBEDDED: a non-embedded standard font is drawn with whatever substitute the OS has
+     * (Windows: two 7 pt letters touched and merged into one contour), so the glyphs must not
+     * depend on the machine. {@code spacingPt} is extra space between letters.
+     */
     private Path textPdf(String name, double w, double h, float sizePt, String text) throws IOException {
+        return textPdf(name, w, h, sizePt, 0f, text);
+    }
+
+    private Path textPdf(String name, double w, double h, float sizePt, float spacingPt, String text)
+            throws IOException {
         Path out = tmp.resolve(name + ".pdf");
         try (PDDocument doc = new PDDocument()) {
             PDPage page = new PDPage(new PDRectangle((float) Units.mmToPt(w), (float) Units.mmToPt(h)));
@@ -399,7 +413,10 @@ class CutComposerTest {
             try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
                 cs.setNonStrokingColor(0f, 0f, 0f);
                 cs.beginText();
-                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA_BOLD), sizePt);
+                try (InputStream font = PDDocument.class.getResourceAsStream(EMBEDDED_FONT)) {
+                    cs.setFont(PDType0Font.load(doc, font), sizePt);
+                }
+                cs.setCharacterSpacing(spacingPt);
                 cs.newLineAtOffset(2, (float) Units.mmToPt(h) / 2 - sizePt / 3);
                 cs.showText(text);
                 cs.endText();
