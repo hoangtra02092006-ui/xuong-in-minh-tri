@@ -1,9 +1,19 @@
 <script setup lang="ts">
-// Placeholder from project skeleton; the screen is built in its own work card.
+import AppButton from '@/shared/ui/AppButton.vue'
+import AppCard from '@/shared/ui/AppCard.vue'
+import StateBlock from '@/shared/ui/StateBlock.vue'
 </script>
 
 <template>
-  <main class="page">
-    <h1>NotFoundView</h1>
-  </main>
+  <div class="page">
+    <AppCard>
+      <StateBlock
+        title="Không tìm thấy trang"
+        text="Đường dẫn này không có trong app. Có thể link đã cũ hoặc gõ nhầm."
+        icon="search"
+      >
+        <AppButton variant="primary" :to="{ name: 'home' }">Về trang chủ</AppButton>
+      </StateBlock>
+    </AppCard>
+  </div>
 </template>

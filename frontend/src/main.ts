@@ -2,10 +2,12 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import { createAppRouter } from './router'
+import { useOrderStore } from './stores/order'
 import './shared/tokens.css'
 
 const app = createApp(App)
-app.use(createPinia())
-// The upload store (built in the nesting card) replaces this with a real "has items" check.
-app.use(createAppRouter(() => false))
+const pinia = createPinia()
+app.use(pinia)
+// Step 2 guard: no design in the order sends the user back to step 1 (spec 5.2).
+app.use(createAppRouter(() => useOrderStore(pinia).items.length > 0))
 app.mount('#app')
