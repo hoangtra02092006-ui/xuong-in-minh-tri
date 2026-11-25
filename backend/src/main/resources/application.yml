@@ -1,0 +1,24 @@
+server:
+  port: ${PORT:8080}
+
+spring:
+  application:
+    name: xuong-in
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 200MB
+  mvc:
+    async:
+      # Streamed responses (zip of many sheets) need a long timeout, otherwise the zip is cut short.
+      request-timeout: ${APP_EXPORT_TIMEOUT_MS:1800000}
+
+app:
+  storage:
+    path: ${APP_STORAGE_PATH:./storage}
+    max-file-size: ${APP_MAX_FILE_SIZE:52428800}
+  cors:
+    origins: ${APP_CORS_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+  retention:
+    hours: ${APP_RETENTION_HOURS:48}
+    sweep-minutes: ${APP_RETENTION_SWEEP_MINUTES:60}

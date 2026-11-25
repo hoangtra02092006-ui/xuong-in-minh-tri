@@ -1,0 +1,10 @@
+{
+  "extraKnownMarketplaces": {
+    "noal-drm-plugins": {
+      "source": { "source": "github", "repo": "hoangtra02092006-ui/potential-v1" }
+    }
+  },
+  "enabledPlugins": {
+    "bo-chuan@noal-drm-plugins": true
+  }
+}
