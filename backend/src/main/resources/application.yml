@@ -77,3 +77,5 @@ app:
     tif-dpi: ${APP_TIFF_DPI:300}
     # A download waiting for a TIF still being built gives up after this (same bound as the zip).
     wait-timeout-ms: ${APP_EXPORT_TIMEOUT_MS:1800000}
+    # Below this much free disk (MB) TIFs are no longer built ahead, only when someone asks.
+    prebuild-min-free-mb: ${APP_TIFF_PREBUILD_MIN_FREE_MB:1024}

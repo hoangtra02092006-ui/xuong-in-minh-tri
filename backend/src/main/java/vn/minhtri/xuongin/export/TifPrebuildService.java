@@ -4,6 +4,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -13,8 +14,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import vn.minhtri.xuongin.export.tif.TifResult;
@@ -27,25 +30,37 @@ import vn.minhtri.xuongin.raster.RasterMemoryGuard;
 import vn.minhtri.xuongin.shared.ApiError;
 import vn.minhtri.xuongin.shared.ApiException;
 import vn.minhtri.xuongin.shared.ErrorCode;
+import vn.minhtri.xuongin.storage.RetentionJanitor;
+import vn.minhtri.xuongin.storage.RetentionParticipant;
 
 /**
  * Builds the TIF of every finished job in the background (design 4a): ONE worker thread, one
- * sheet at a time (RAM cap of the shared server), sheets from 1 up, files on disk. A download or
- * {@code prioritize} moves a sheet to the front; a failed sheet is retried when asked again.
- * Runs server-side, so closing the browser tab changes nothing.
+ * sheet at a time (RAM cap of the shared server), newest job first, sheets from 1 up, files on
+ * disk. A download or {@code prioritize} moves a sheet to the front; a failed sheet is retried
+ * when asked again. Runs server-side, so closing the browser tab changes nothing.
+ *
+ * <p>Disk (design 7, shared server): below {@link RetentionJanitor#LOW_DISK_BYTES} free the log
+ * gets a warning; below {@code prebuildMinFreeMb} sheets nobody asked for are not built ahead any
+ * more (they stay "waiting" and are built when someone clicks them).
  */
 @Service
-public class TifPrebuildService {
+public class TifPrebuildService implements RetentionParticipant {
 
     private static final Logger log = LoggerFactory.getLogger(TifPrebuildService.class);
     private static final long POLL_MS = 1_000;
+    private static final long MB = 1024L * 1024L;
+    /** At most one low-disk warning per this many ms (the worker checks before every sheet). */
+    private static final long WARN_EVERY_MS = 10 * 60_000L;
 
     private final JobStore jobs;
     private final ExportStore store;
     private final SheetTifBuilder builder;
+    private final LongSupplier freeBytes;
+    private final long minFreeBytes;
     private final TifQueue queue = new TifQueue();
     private final Map<String, Slot[]> slots = new ConcurrentHashMap<>();
     private volatile Thread worker;
+    private volatile long lastWarnAt = Long.MIN_VALUE;
 
     /** State plus a future that completes with the file when READY, exceptionally when FAILED. */
     private record Slot(SheetTif state, CompletableFuture<Path> done) {
@@ -54,10 +69,27 @@ public class TifPrebuildService {
         }
     }
 
-    public TifPrebuildService(JobStore jobs, ExportStore store, SheetTifBuilder builder) {
+    @Autowired
+    public TifPrebuildService(JobStore jobs, ExportStore store, SheetTifBuilder builder, ExportProperties properties) {
+        this(jobs, store, builder, () -> {
+            Long free = RetentionJanitor.usableBytes(store.root());
+            return free == null ? Long.MAX_VALUE : free;
+        }, properties.prebuildMinFreeMb() * MB);
+    }
+
+    /** Without a disk limit (tests). */
+    TifPrebuildService(JobStore jobs, ExportStore store, SheetTifBuilder builder) {
+        this(jobs, store, builder, () -> Long.MAX_VALUE, 0);
+    }
+
+    /** @param freeBytes usable bytes on the export volume (injectable for tests) */
+    TifPrebuildService(JobStore jobs, ExportStore store, SheetTifBuilder builder, LongSupplier freeBytes,
+            long minFreeBytes) {
         this.jobs = jobs;
         this.store = store;
         this.builder = builder;
+        this.freeBytes = freeBytes;
+        this.minFreeBytes = minFreeBytes;
         store.onPurge(this::forget);
     }
 
@@ -179,6 +211,22 @@ public class TifPrebuildService {
         }
     }
 
+    /**
+     * Forgets jobs the job store no longer has, also those that expired before any TIF was
+     * written (no export folder, so {@link ExportStore}'s purge never reports them).
+     */
+    @Override
+    public int purgeOlderThan(Instant cutoff) {
+        int removed = 0;
+        for (String jobId : List.copyOf(slots.keySet())) {
+            if (jobs.find(jobId).isEmpty()) {
+                forget(jobId);
+                removed++;
+            }
+        }
+        return removed;
+    }
+
     /** Drops the state and waiting sheets of a purged job. */
     public void forget(String jobId) {
         queue.removeJob(jobId);
@@ -209,9 +257,14 @@ public class TifPrebuildService {
      * @return false when nothing was queued
      */
     boolean runOnce(long timeoutMs) throws InterruptedException {
-        TifQueue.Task task = queue.poll(timeoutMs, TimeUnit.MILLISECONDS);
-        if (task == null) {
+        TifQueue.Next next = queue.next(timeoutMs, TimeUnit.MILLISECONDS);
+        if (next == null) {
             return false;
+        }
+        TifQueue.Task task = next.task();
+        if (!next.requested() && !diskAllowsPrebuild(task)) {
+            // Left QUEUED: prioritize() puts it back when someone asks for it.
+            return true;
         }
         Slot[] all = slots.get(task.jobId());
         if (all == null) {
@@ -228,6 +281,26 @@ public class TifPrebuildService {
         }
         build(task, all, slot.done());
         return true;
+    }
+
+    /** Warns below 3 GB free; refuses to build ahead below {@code minFreeBytes}. */
+    private boolean diskAllowsPrebuild(TifQueue.Task task) {
+        long free = freeBytes.getAsLong();
+        boolean allowed = free >= minFreeBytes;
+        if (free < RetentionJanitor.LOW_DISK_BYTES) {
+            long now = System.currentTimeMillis();
+            if (lastWarnAt == Long.MIN_VALUE || now - lastWarnAt >= WARN_EVERY_MS || !allowed) {
+                lastWarnAt = now;
+                if (allowed) {
+                    log.warn("Low disk space: {} MB free for exports (warning below {} MB)", free / MB,
+                            RetentionJanitor.LOW_DISK_BYTES / MB);
+                } else {
+                    log.warn("Low disk space: {} MB free, below {} MB: TIF of job {} sheet {} is not built ahead,"
+                            + " only when asked", free / MB, minFreeBytes / MB, task.jobId(), task.index() + 1);
+                }
+            }
+        }
+        return allowed;
     }
 
     private void build(TifQueue.Task task, Slot[] all, CompletableFuture<Path> done) {

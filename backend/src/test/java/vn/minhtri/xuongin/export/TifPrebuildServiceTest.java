@@ -196,4 +196,46 @@ class TifPrebuildServiceTest {
         assertThat(service.queue().snapshot()).isEmpty();
         assertThat(dir.resolve("exports/j")).doesNotExist();
     }
+
+    // ---- disk floor (design 7) and purge by job store ----
+
+    @Test
+    void lowDiskStopsBuildingAheadButStillBuildsWhatIsAskedFor() throws Exception {
+        service.stop();
+        java.util.concurrent.atomic.AtomicLong free = new java.util.concurrent.atomic.AtomicLong(100L << 20);
+        service = new TifPrebuildService(jobs, store, builder, free::get, 512L << 20);
+        Job job = register("j", 2);
+
+        // Nobody asked: both sheets are skipped and stay QUEUED, nothing is written.
+        assertThat(service.runOnce(0)).isTrue();
+        assertThat(service.runOnce(0)).isTrue();
+        assertThat(service.runOnce(0)).isFalse();
+        assertThat(service.statuses("j").orElseThrow()).containsOnly(SheetTif.QUEUED);
+        org.mockito.Mockito.verifyNoInteractions(builder);
+
+        // A click still builds that sheet.
+        service.prioritize(job, 1);
+        service.runOnce(0);
+        assertThat(service.statuses("j").orElseThrow()).containsExactly(SheetTif.QUEUED, SheetTif.ready(123));
+
+        // Space is back: a new job is built ahead again.
+        free.set(10L << 30);
+        register("k", 1);
+        service.runOnce(0);
+        assertThat(service.statuses("k").orElseThrow()).containsExactly(SheetTif.ready(123));
+    }
+
+    @Test
+    void jobsGoneFromTheJobStoreAreForgottenEvenWithoutAnExportFolder() throws Exception {
+        register("gone", 2);
+        register("kept", 1);
+        jobs.purgeOlderThan(Instant.now().plusSeconds(1));
+        jobs.save(doneJob("kept", 1));
+
+        assertThat(service.purgeOlderThan(Instant.now())).isEqualTo(1);
+        assertThat(service.statuses("gone")).isEmpty();
+        assertThat(service.statuses("kept")).isPresent();
+        assertThat(service.queue().snapshot()).extracting(TifQueue.Task::jobId).containsOnly("kept");
+        assertThat(dir.resolve("exports/gone")).doesNotExist();
+    }
 }
