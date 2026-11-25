@@ -232,6 +232,72 @@ class TifEncoderTest {
         return out;
     }
 
+    // ---- APP_TIFF_WHITE_ENABLED / APP_TIFF_COLOR_MODE (spec 10.2, 13) ----
+
+    static final byte[] SRGB = "srgb-profile".getBytes(StandardCharsets.US_ASCII);
+
+    @Test
+    void withoutWhiteTheFileIsPlainCmyk() throws IOException {
+        TifEncoder.Options noWhite = new TifEncoder.Options(NAIVE, FAKE_ICC, "W1", 1, TifCompression.DEFLATE, 0.3,
+                true, true, TifColorMode.CMYK, false);
+        Tiff tif = read(encode("a.tif", 50, noWhite));
+        assertThat(tif.get(TifEncoder.TAG_SAMPLES_PER_PIXEL)).isEqualTo(4);
+        assertThat(tif.all(TifEncoder.TAG_BITS_PER_SAMPLE)).containsExactly(8, 8, 8, 8);
+        assertThat(tif.get(TifEncoder.TAG_PHOTOMETRIC)).isEqualTo(5);
+        assertThat(tif.fields()).doesNotContainKeys(TifEncoder.TAG_EXTRA_SAMPLES, TifEncoder.TAG_PHOTOSHOP);
+        assertThat(tif.raw(TifEncoder.TAG_ICC_PROFILE)).isEqualTo(FAKE_ICC);
+
+        // Same CMYK values as the default file, just without the fifth channel.
+        byte[] four = tif.samples();
+        byte[] five = read(encode("b.tif", 50, options(1, TifCompression.DEFLATE, true, true))).samples();
+        assertThat(four).hasSize(W * H * 4);
+        for (int i = 0; i < W * H; i++) {
+            for (int c = 0; c < 4; c++) {
+                assertThat(four[i * 4 + c]).isEqualTo(five[i * 5 + c]);
+            }
+        }
+        Layer layer = TiffTestReader.layer(tif.raw(TifEncoder.TAG_IMAGE_SOURCE_DATA), ByteOrder.BIG_ENDIAN);
+        assertThat(layer.channels()).extracting(LayerChannel::id).containsExactly(-1, 0, 1, 2, 3);
+    }
+
+    @Test
+    void rgbModeWritesRgbWithTheSrgbProfileAndNoW1() throws IOException {
+        // White enabled in the settings is ignored: spec 10.2 "rgb" has no W1. No CMYK converter needed.
+        TifEncoder.Options rgb = new TifEncoder.Options(null, SRGB, "W1", 1, TifCompression.DEFLATE, 0.3,
+                true, true, TifColorMode.RGB, true);
+        Tiff tif = read(encode("a.tif", 37, rgb));
+        assertThat(tif.get(TifEncoder.TAG_SAMPLES_PER_PIXEL)).isEqualTo(3);
+        assertThat(tif.all(TifEncoder.TAG_BITS_PER_SAMPLE)).containsExactly(8, 8, 8);
+        assertThat(tif.get(TifEncoder.TAG_PHOTOMETRIC)).isEqualTo(2);
+        assertThat(tif.fields()).doesNotContainKeys(TifEncoder.TAG_EXTRA_SAMPLES, TifEncoder.TAG_PHOTOSHOP);
+        assertThat(tif.raw(TifEncoder.TAG_ICC_PROFILE)).isEqualTo(SRGB);
+        assertThat(tif.rational(TifEncoder.TAG_X_RESOLUTION)).containsExactly(300, 1);
+
+        byte[] samples = tif.samples();
+        assertThat(samples).hasSize(W * H * 3);
+        assertRgb(samples, 0, 0, 0xFFFFFF);      // transparent → white, no ink
+        assertRgb(samples, 30, 20, 0xFF0000);    // red
+        assertRgb(samples, 170, 80, 0x9B9BFF);   // 0x64 blue over white
+        assertRgb(samples, 5, 110, 0x00FF00);    // green at the edge
+
+        // Layer: transparency + R, G, B stored as is (PSD inverts CMYK only).
+        Layer layer = TiffTestReader.layer(tif.raw(TifEncoder.TAG_IMAGE_SOURCE_DATA), ByteOrder.BIG_ENDIAN);
+        assertThat(layer.channels()).extracting(LayerChannel::id).containsExactly(-1, 0, 1, 2);
+        byte[] mask = maskOf(sheet());
+        for (int i = 0; i < W * H; i++) {
+            assertThat(layer.channels().get(0).decoded()[i]).isEqualTo(mask[i] != 0 ? (byte) 0xFF : 0);
+            for (int c = 0; c < 3; c++) {
+                assertThat(layer.channels().get(c + 1).decoded()[i]).isEqualTo(samples[i * 3 + c]);
+            }
+        }
+    }
+
+    static void assertRgb(byte[] samples, int x, int y, int rgb) {
+        int i = (y * W + x) * 3;
+        assertThat(new int[] {samples[i] & 0xFF, samples[i + 1] & 0xFF, samples[i + 2] & 0xFF})
+                .as("pixel %d,%d", x, y).containsExactly((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+    }
+
     @Test
     void layerBlockHasOneFullSheetLayerWithTransparencyAndInvertedCmyk() throws IOException {
         int[] argb = sheet();

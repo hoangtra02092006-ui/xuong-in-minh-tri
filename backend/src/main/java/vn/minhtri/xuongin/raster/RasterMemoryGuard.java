@@ -1,8 +1,12 @@
 package vn.minhtri.xuongin.raster;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import java.util.function.LongSupplier;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -23,6 +27,12 @@ import vn.minhtri.xuongin.shared.ErrorCode;
  *       ARGB 4 + CMYK conversion 4 + 5-channel samples 5.</li>
  * </ul>
  * Off-heap memory of ImageIO / ICC / PDFBox is not counted, hence the fraction (default 0.5).
+ *
+ * <p>The same {@code heap × maxHeapFraction} is also a process-wide budget ({@link #reserve}):
+ * the background TIF worker and cut files built on request threads run at the same time, so each
+ * build reserves its estimate (raster plus the largest decoded source image) before rendering
+ * and waits, first come first served, until the others leave enough room. A reservation larger
+ * than the budget is cut to the whole budget: that build then runs alone.
  */
 @Component
 public class RasterMemoryGuard {
@@ -36,6 +46,8 @@ public class RasterMemoryGuard {
     private final RasterProperties properties;
     private final LongSupplier maxHeap;
     private final int bandRows;
+    private final Deque<Object> waiting = new ArrayDeque<>();
+    private long reserved;
 
     @Autowired
     public RasterMemoryGuard(RasterProperties properties) {
@@ -131,24 +143,112 @@ public class RasterMemoryGuard {
         return lo == 0 ? null : lo * 10.0;
     }
 
+    /**
+     * Workers cannot change the server DPI, so the advice leads with what they can change (the
+     * max length of each file) and names the DPI as something to ask the manager for.
+     */
     private static String message(int sheetIndex, double widthMm, double lengthMm, int dpi, RasterSize size,
             long needMb, Integer suggestedDpi, Double suggestedLengthMm) {
         StringBuilder text = new StringBuilder(String.format(Locale.ROOT,
                 "Tấm %d (%s × %s cm) quá lớn để dựng file TIF ở %d DPI: %d × %d điểm ảnh, cần khoảng %d MB bộ nhớ.",
                 sheetIndex + 1, cm(widthMm), cm(lengthMm), dpi, size.width(), size.height(), needMb));
-        if (suggestedDpi != null) {
-            text.append(" Hãy đặt DPI khoảng ").append(suggestedDpi);
-            text.append(suggestedLengthMm != null ? ", hoặc" : ".");
-        } else {
-            text.append(" Hãy");
-        }
         if (suggestedLengthMm != null) {
-            text.append(" giảm chiều dài tối đa mỗi file xuống ").append(cm(suggestedLengthMm)).append(" cm.");
-        } else if (suggestedDpi == null) {
-            text.append(" giảm chiều dài tối đa mỗi file.");
+            text.append(" Hãy giảm chiều dài tối đa mỗi file xuống ").append(cm(suggestedLengthMm))
+                    .append(" cm rồi ghép lại.");
+        } else {
+            text.append(" Hãy giảm chiều dài tối đa mỗi file rồi ghép lại.");
+        }
+        if (suggestedDpi != null) {
+            text.append(" Nếu cần giữ nguyên chiều dài, báo người quản lý đặt DPI của máy chủ khoảng ")
+                    .append(suggestedDpi).append('.');
         }
         text.append(" Bản PDF không bị giới hạn này.");
         return text.toString();
+    }
+
+    /**
+     * Reserves {@code bytes} of the shared raster budget, waiting at most {@code waitMs} for the
+     * builds ahead to finish. Close the reservation (try-with-resources) when the build ends.
+     *
+     * @param busy thrown when the wait runs out or the thread is interrupted
+     */
+    public Reservation reserve(long bytes, long waitMs, Supplier<ApiException> busy) {
+        long amount = Math.max(0, Math.min(bytes, allowedBytes()));
+        Object ticket = new Object();
+        long deadline = System.nanoTime() + waitMs * 1_000_000L;
+        synchronized (waiting) {
+            waiting.addLast(ticket);
+            try {
+                while (waiting.peekFirst() != ticket || reserved + amount > allowedBytes()) {
+                    long left = deadline - System.nanoTime();
+                    if (left <= 0) {
+                        throw busy.get();
+                    }
+                    TimeUnit.NANOSECONDS.timedWait(waiting, left);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                waiting.remove(ticket);
+                waiting.notifyAll();
+                throw busy.get();
+            } catch (RuntimeException e) {
+                waiting.remove(ticket);
+                waiting.notifyAll();
+                throw e;
+            }
+            waiting.removeFirst();
+            reserved += amount;
+            // The next in line may fit too.
+            waiting.notifyAll();
+        }
+        return new Reservation(amount);
+    }
+
+    /** Bytes currently reserved by running builds (for tests and logs). */
+    public long reservedBytes() {
+        synchronized (waiting) {
+            return reserved;
+        }
+    }
+
+    private void release(long amount) {
+        synchronized (waiting) {
+            reserved -= amount;
+            waiting.notifyAll();
+        }
+    }
+
+    /**
+     * {@code TIFF_TOO_LARGE} for a build that ran out of heap despite the estimate (other memory
+     * use of the server, an unusual source file). Never {@code INTERNAL_ERROR}: the worker can act.
+     */
+    public static ApiException outOfMemory(int sheetIndex, String fileKind) {
+        return new ApiException(ErrorCode.TIFF_TOO_LARGE, "Máy chủ không đủ bộ nhớ để dựng file " + fileKind
+                + " tấm " + (sheetIndex + 1) + ". Hãy giảm chiều dài tối đa mỗi file rồi ghép lại, hoặc thử lại sau"
+                + " ít phút khi máy chủ rảnh hơn. Nếu vẫn lỗi, báo người quản lý (có thể cần giảm DPI của máy chủ)."
+                + " Bản PDF không bị giới hạn này.", Map.of("sheetIndex", sheetIndex, "outOfMemory", true));
+    }
+
+    /** A share of the raster budget; {@link #close()} gives it back (once). */
+    public final class Reservation implements AutoCloseable {
+        private final long amount;
+        private boolean closed;
+
+        private Reservation(long amount) {
+            this.amount = amount;
+        }
+
+        public long bytes() {
+            return amount;
+        }
+
+        @Override
+        public synchronized void close() {
+            if (!closed) {
+                closed = true;
+                release(amount);
+            }
+        }
     }
 
     /** Vietnamese number style: decimal comma, no trailing zeros. */

@@ -115,4 +115,39 @@ class NestRequestValidatorTest {
         assertThat(NestRequestValidator.cm(25)).isEqualTo("2,5");
         assertThat(NestRequestValidator.cm(33.87)).isEqualTo("3,39");
     }
+
+    @Test
+    void limitsCountEveryRowAndTheShortestSide() {
+        StoredFile a = file("a", FileType.PDF, 70, 30, null, 0);
+        NestingProperties limits = new NestingProperties(5, 1.0);
+        // 2 + 2 = 4 pieces of 70 x 30 mm: fine.
+        NestRequestValidator.checkLimits(NestRequestValidator.resolve(
+                request(570, 5, true, item("a", true, null, null), item("a", true, null, null)), Map.of("a", a)), limits);
+        // 6 pieces > 5.
+        List<ResolvedItem> six = NestRequestValidator.resolve(request(570, 5, true, item("a", true, null, null),
+                item("a", true, null, null), item("a", true, null, null)), Map.of("a", a));
+        assertThatThrownBy(() -> NestRequestValidator.checkLimits(six, limits))
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.code()).isEqualTo(ErrorCode.INVALID_REQUEST);
+                    assertThat(e.details()).containsEntry("totalPieces", 6L).containsEntry("maxTotalPieces", 5);
+                });
+        // Exactly 1 mm passes, 0.99 mm does not (the height counts as much as the width).
+        NestRequestValidator.checkLimits(NestRequestValidator.resolve(
+                request(570, 5, true, item("a", true, 1.0, 1.0)), Map.of("a", a)), limits);
+        List<ResolvedItem> thin = NestRequestValidator.resolve(
+                request(570, 5, true, item("a", true, 50.0, 0.99)), Map.of("a", a));
+        assertThatThrownBy(() -> NestRequestValidator.checkLimits(thin, limits))
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.code()).isEqualTo(ErrorCode.INVALID_REQUEST);
+                    assertThat(e.getMessage()).isEqualTo("Hình \"a.pdf\" 50x0,99 mm quá nhỏ: mỗi cạnh phải từ 1 mm trở lên.");
+                    assertThat(e.details()).containsEntry("fileId", "a");
+                });
+    }
+
+    @Test
+    void limitsMustBePositive() {
+        assertThatThrownBy(() -> new NestingProperties(0, 1.0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new NestingProperties(10, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThat(NestingProperties.defaults()).isEqualTo(new NestingProperties(10_000, 1.0));
+    }
 }

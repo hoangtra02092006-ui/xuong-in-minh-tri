@@ -113,7 +113,33 @@ public class CutComposer {
         int dpi = properties.dpi();
         RasterSize size = SheetRasterizer.sizeOf(sheet.widthMm(), sheet.lengthMm(), dpi);
         checkMemory(sheet, size, dpi);
+        CutResult result;
+        try {
+            result = composeChecked(sheet, files, sheetPdf, out, size, dpi);
+        } catch (OutOfMemoryError e) {
+            // The big arrays are unreachable once composeChecked unwound: report it as TIFF_TOO_LARGE.
+            log.warn("Cut file of sheet {} ran out of memory ({} x {} px)", sheet.index() + 1, size.width(),
+                    size.height());
+            throw RasterMemoryGuard.outOfMemory(sheet.index(), "cắt");
+        }
+        logResult(sheet, result, size, dpi, (System.nanoTime() - started) / 1_000_000);
+        return result;
+    }
 
+    /**
+     * Peak heap bytes of the raster part of {@link #compose} for this sheet (source images not
+     * included), for the shared raster budget.
+     *
+     * @throws ApiException {@code TIFF_TOO_LARGE} when the sheet cannot be built at all
+     */
+    public long estimateBytes(Sheet sheet) {
+        int dpi = properties.dpi();
+        RasterSize size = SheetRasterizer.sizeOf(sheet.widthMm(), sheet.lengthMm(), dpi);
+        return estimateBytes(size, rasterizer.bandRows(), checkMemory(sheet, size, dpi));
+    }
+
+    private CutResult composeChecked(Sheet sheet, Function<String, StoredFile> files, Path sheetPdf,
+            OutputStream out, RasterSize size, int dpi) throws IOException {
         byte[] mask = buildMask(sheet, files, sheetPdf, size, dpi);
         double padMm = CornerClearance.paddingMm(mask, size.width(), size.height(),
                 sheet.widthMm(), sheet.lengthMm(), dpi, properties.cornerZoneMm());
@@ -122,9 +148,9 @@ public class CutComposer {
         CutResult result = new CutResult(sheet.widthMm(), sheet.lengthMm() + 2 * padMm, padMm,
                 contours.outer, contours.holes, contours.dropped);
         writePdf(result, contours.paths, sheetPdf, out);
-        logResult(sheet, result, size, dpi, (System.nanoTime() - started) / 1_000_000);
         return result;
     }
+
 
     private byte[] buildMask(Sheet sheet, Function<String, StoredFile> files, Path sheetPdf, RasterSize size,
             int dpi) throws IOException {
@@ -305,10 +331,11 @@ public class CutComposer {
                 && estimateBytes(size, rasterizer.bandRows(), dilating) <= memoryGuard.allowedBytes();
     }
 
-    private void checkMemory(Sheet sheet, RasterSize size, int dpi) {
+    /** @return whether the mask is dilated (part of the estimate) */
+    private boolean checkMemory(Sheet sheet, RasterSize size, int dpi) {
         boolean dilating = properties.offsetMm() > 0;
         if (fits(size, dilating)) {
-            return;
+            return dilating;
         }
         Integer suggestedDpi = null;
         for (int candidate = (dpi - 1) / DPI_STEP * DPI_STEP; candidate >= MIN_SUGGESTED_DPI; candidate -= DPI_STEP) {
@@ -328,9 +355,9 @@ public class CutComposer {
         if (suggestedDpi != null) {
             details.put("suggestedDpi", suggestedDpi);
         }
-        String advice = suggestedDpi != null
-                ? " Hãy đặt APP_CUT_DPI khoảng " + suggestedDpi + " hoặc giảm chiều dài tối đa mỗi file."
-                : " Hãy giảm chiều dài tối đa mỗi file.";
+        String advice = " Hãy giảm chiều dài tối đa mỗi file rồi ghép lại."
+                + (suggestedDpi != null ? " Nếu cần giữ nguyên chiều dài, báo người quản lý đặt APP_CUT_DPI khoảng "
+                        + suggestedDpi + "." : "");
         throw new ApiException(ErrorCode.TIFF_TOO_LARGE, String.format(Locale.ROOT,
                 "Tấm %d quá lớn để dựng file cắt ở %d DPI: %d × %d điểm ảnh, cần khoảng %d MB bộ nhớ.",
                 sheet.index() + 1, dpi, size.width(), size.height(), needMb) + advice, details);

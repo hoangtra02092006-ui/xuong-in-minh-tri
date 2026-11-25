@@ -7,6 +7,7 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.Arrays;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import vn.minhtri.xuongin.raster.BandConsumer;
@@ -14,7 +15,8 @@ import vn.minhtri.xuongin.raster.BandConsumer;
 /**
  * Streams one sheet into a print-ready TIF (spec 10.2 to 10.4): CMYK + W1 white ink, 8 bits,
  * ExtraSamples 0, resolution tags, ICC profile, Photoshop spot-channel block (34377) and
- * transparency layer (37724).
+ * transparency layer (37724). Without W1 ({@code APP_TIFF_WHITE_ENABLED=false}) the file is plain
+ * CMYK; in RGB mode ({@code APP_TIFF_COLOR_MODE=rgb}) it is RGB with the sRGB profile, no W1.
  *
  * <p>Usage: get one from {@link TifEncoderFactory#open}, pass it to the rasterizer as a
  * {@link BandConsumer} (bands of any height, top to bottom), then {@link #finish()}. Always
@@ -54,7 +56,9 @@ public final class TifEncoder implements BandConsumer, Closeable {
     static final int TAG_ICC_PROFILE = 34675;
     static final int TAG_IMAGE_SOURCE_DATA = 37724;
 
+    static final int PHOTOMETRIC_RGB = 2;
     static final int PHOTOMETRIC_SEPARATED = 5;
+    static final int RGB = 3;
     static final int RESOLUTION_UNIT_INCH = 2;
     static final int EXTRA_SAMPLES_UNSPECIFIED = 0;
     static final String SOFTWARE = "Xuong in Minh Tri";
@@ -62,9 +66,33 @@ public final class TifEncoder implements BandConsumer, Closeable {
     private static final int CHUNK_ROWS = 64;
     private static final Logger log = LoggerFactory.getLogger(TifEncoder.class);
 
-    /** Everything the encoder needs besides the sheet itself. */
+    /**
+     * Everything the encoder needs besides the sheet itself.
+     *
+     * @param converter    RGB to CMYK; unused (may be null) in RGB mode
+     * @param iccProfile   bytes for tag 34675: the CMYK profile, or sRGB in RGB mode
+     * @param whiteEnabled W1 channel; always off in RGB mode
+     */
     record Options(CmykConverter converter, byte[] iccProfile, String whiteChannelName, int chokePixels,
-            TifCompression compression, double compressionQuality, boolean transparentLayer, boolean layerZip) {}
+            TifCompression compression, double compressionQuality, boolean transparentLayer, boolean layerZip,
+            TifColorMode colorMode, boolean whiteEnabled) {
+
+        /** CMYK + W1, the print shop's default. */
+        Options(CmykConverter converter, byte[] iccProfile, String whiteChannelName, int chokePixels,
+                TifCompression compression, double compressionQuality, boolean transparentLayer, boolean layerZip) {
+            this(converter, iccProfile, whiteChannelName, chokePixels, compression, compressionQuality,
+                    transparentLayer, layerZip, TifColorMode.CMYK, true);
+        }
+
+        boolean rgb() {
+            return colorMode == TifColorMode.RGB;
+        }
+
+        /** W1 is written only in CMYK mode and when enabled. */
+        boolean white() {
+            return whiteEnabled && !rgb();
+        }
+    }
 
     private final Path target;
     private final Path part;
@@ -78,8 +106,10 @@ public final class TifEncoder implements BandConsumer, Closeable {
     private final TiffFile file;
     private final PhotoshopLayer layer;
 
+    private final int colours;
+    private final int samples;
     private final int[] rgb;
-    private final byte[] cmyk;
+    private final byte[] colour;
     private final boolean[] white;
     private final byte[] strip;
     private final ByteArrayOutputStream compressed = new ByteArrayOutputStream();
@@ -102,7 +132,7 @@ public final class TifEncoder implements BandConsumer, Closeable {
         if (width <= 0 || height <= 0 || dpi <= 0) {
             throw new IllegalArgumentException("width, height and dpi must be positive");
         }
-        if ((long) width * height * SAMPLES > Integer.MAX_VALUE || inkMask.length != width * height) {
+        if ((long) width * height * SAMPLES > Integer.MAX_VALUE || inkMask.length != (long) width * height) {
             throw new IllegalArgumentException("ink mask must hold width × height = " + (long) width * height
                     + " bytes, got " + inkMask.length);
         }
@@ -113,11 +143,13 @@ public final class TifEncoder implements BandConsumer, Closeable {
         this.dpi = dpi;
         this.mask = inkMask;
         this.options = options;
-        this.choke = new WhiteChoke(inkMask, width, height, options.chokePixels());
+        this.colours = options.rgb() ? RGB : CMYK;
+        this.samples = colours + (options.white() ? 1 : 0);
+        this.choke = options.white() ? new WhiteChoke(inkMask, width, height, options.chokePixels()) : null;
         this.rgb = new int[CHUNK_ROWS * width];
-        this.cmyk = new byte[CHUNK_ROWS * width * CMYK];
-        this.white = new boolean[width];
-        this.strip = new byte[ROWS_PER_STRIP * width * SAMPLES];
+        this.colour = new byte[CHUNK_ROWS * width * colours];
+        this.white = options.white() ? new boolean[width] : null;
+        this.strip = new byte[ROWS_PER_STRIP * width * samples];
         int strips = (height + ROWS_PER_STRIP - 1) / ROWS_PER_STRIP;
         this.stripOffsets = new long[strips];
         this.stripByteCounts = new long[strips];
@@ -127,7 +159,8 @@ public final class TifEncoder implements BandConsumer, Closeable {
         try {
             opened = new TiffFile(part);
             this.layer = options.transparentLayer()
-                    ? new PhotoshopLayer(this.target.getParent(), width, height, options.layerZip())
+                    ? new PhotoshopLayer(this.target.getParent(), width, height, options.layerZip(), colours,
+                            !options.rgb())
                     : null;
         } catch (IOException | RuntimeException e) {
             codec.close();
@@ -161,9 +194,13 @@ public final class TifEncoder implements BandConsumer, Closeable {
         for (int done = 0; done < rows; done += CHUNK_ROWS) {
             int n = Math.min(CHUNK_ROWS, rows - done);
             flattenOntoWhite(argb, done * width, n * width);
-            options.converter().convert(rgb, width, n, cmyk);
+            if (options.rgb()) {
+                splitRgb(n * width);
+            } else {
+                options.converter().convert(rgb, width, n, colour);
+            }
             for (int r = 0; r < n; r++) {
-                emitRow(r * width * CMYK);
+                emitRow(r * width * colours);
             }
         }
     }
@@ -184,11 +221,13 @@ public final class TifEncoder implements BandConsumer, Closeable {
         }
         file.addLongs(TAG_IMAGE_WIDTH, width);
         file.addLongs(TAG_IMAGE_LENGTH, height);
-        file.addShorts(TAG_BITS_PER_SAMPLE, 8, 8, 8, 8, 8);
+        int[] bits = new int[samples];
+        Arrays.fill(bits, 8);
+        file.addShorts(TAG_BITS_PER_SAMPLE, bits);
         file.addShorts(TAG_COMPRESSION, codec.tiffCode());
-        file.addShorts(TAG_PHOTOMETRIC, PHOTOMETRIC_SEPARATED);
+        file.addShorts(TAG_PHOTOMETRIC, options.rgb() ? PHOTOMETRIC_RGB : PHOTOMETRIC_SEPARATED);
         file.addLongs(TAG_STRIP_OFFSETS, stripOffsets);
-        file.addShorts(TAG_SAMPLES_PER_PIXEL, SAMPLES);
+        file.addShorts(TAG_SAMPLES_PER_PIXEL, samples);
         file.addLongs(TAG_ROWS_PER_STRIP, ROWS_PER_STRIP);
         file.addLongs(TAG_STRIP_BYTE_COUNTS, stripByteCounts);
         file.addRational(TAG_X_RESOLUTION, dpi, 1);
@@ -196,9 +235,11 @@ public final class TifEncoder implements BandConsumer, Closeable {
         file.addShorts(TAG_PLANAR_CONFIG, 1);
         file.addShorts(TAG_RESOLUTION_UNIT, RESOLUTION_UNIT_INCH);
         file.addAscii(TAG_SOFTWARE, SOFTWARE);
-        // 0 = unspecified. 2 (unassociated alpha) would make software read W1 as transparency.
-        file.addShorts(TAG_EXTRA_SAMPLES, EXTRA_SAMPLES_UNSPECIFIED);
-        file.addBytes(TAG_PHOTOSHOP, PhotoshopResources.spotChannel(options.whiteChannelName()));
+        if (options.white()) {
+            // 0 = unspecified. 2 (unassociated alpha) would make software read W1 as transparency.
+            file.addShorts(TAG_EXTRA_SAMPLES, EXTRA_SAMPLES_UNSPECIFIED);
+            file.addBytes(TAG_PHOTOSHOP, PhotoshopResources.spotChannel(options.whiteChannelName()));
+        }
         file.addBytes(TAG_ICC_PROFILE, options.iccProfile());
         file.finish();
         file.close();
@@ -262,18 +303,32 @@ public final class TifEncoder implements BandConsumer, Closeable {
         }
     }
 
-    private void emitRow(int cmykOffset) throws IOException {
-        choke.row(nextRow, white);
-        int at = rowsInStrip * width * SAMPLES;
-        for (int x = 0, c = cmykOffset; x < width; x++, c += CMYK, at += SAMPLES) {
-            strip[at] = cmyk[c];
-            strip[at + 1] = cmyk[c + 1];
-            strip[at + 2] = cmyk[c + 2];
-            strip[at + 3] = cmyk[c + 3];
-            strip[at + 4] = white[x] ? W1_INK : W1_NONE;
+    /** RGB mode: the flattened pixels as interleaved R, G, B bytes. */
+    private void splitRgb(int count) {
+        for (int i = 0, at = 0; i < count; i++, at += RGB) {
+            int p = rgb[i];
+            colour[at] = (byte) (p >> 16);
+            colour[at + 1] = (byte) (p >> 8);
+            colour[at + 2] = (byte) p;
+        }
+    }
+
+    private void emitRow(int colourOffset) throws IOException {
+        int at = rowsInStrip * width * samples;
+        if (white == null) {
+            System.arraycopy(colour, colourOffset, strip, at, width * colours);
+        } else {
+            choke.row(nextRow, white);
+            for (int x = 0, c = colourOffset; x < width; x++, c += CMYK, at += samples) {
+                strip[at] = colour[c];
+                strip[at + 1] = colour[c + 1];
+                strip[at + 2] = colour[c + 2];
+                strip[at + 3] = colour[c + 3];
+                strip[at + 4] = white[x] ? W1_INK : W1_NONE;
+            }
         }
         if (layer != null) {
-            layer.addRow(cmyk, cmykOffset, mask, nextRow * width);
+            layer.addRow(colour, colourOffset, mask, nextRow * width);
         }
         nextRow++;
         rowsInStrip++;
@@ -284,7 +339,7 @@ public final class TifEncoder implements BandConsumer, Closeable {
 
     private void writeStrip() throws IOException {
         compressed.reset();
-        codec.compress(strip, rowsInStrip * width * SAMPLES, compressed);
+        codec.compress(strip, rowsInStrip * width * samples, compressed);
         file.align();
         stripOffsets[stripIndex] = file.position();
         stripByteCounts[stripIndex] = compressed.size();

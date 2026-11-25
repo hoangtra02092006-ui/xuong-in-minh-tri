@@ -24,6 +24,11 @@ app:
     hours: ${APP_RETENTION_HOURS:48}
     sweep-minutes: ${APP_RETENTION_SWEEP_MINUTES:60}
 
+  # nesting/NestingProperties (safety limits of one request)
+  nesting:
+    max-total-pieces: ${APP_NESTING_MAX_PIECES:10000}
+    min-piece-mm: ${APP_NESTING_MIN_PIECE_MM:1.0}
+
   # file/FileProperties
   file:
     trim-enabled: ${APP_TRIM_ENABLED:true}
@@ -35,13 +40,18 @@ app:
     band-rows: ${APP_TIFF_BAND_ROWS:1024}
     white-alpha-threshold: ${APP_TIFF_WHITE_ALPHA_THRESHOLD:128}
     white-tolerance: ${APP_TIFF_WHITE_TOLERANCE:6}
+    # A cut file waits this long for TIF / other cut builds to free the shared raster budget.
+    budget-wait-ms: ${APP_TIFF_BUDGET_WAIT_MS:120000}
     # export/tif/TifProperties
     encoder:
+      # cmyk (CMYK + W1, default) or rgb (RGB + sRGB, no W1)
+      color-mode: ${APP_TIFF_COLOR_MODE:cmyk}
       cmyk-profile: ${APP_TIFF_CMYK_PROFILE:classpath:color/USWebCoatedSWOP.icc}
       compression: ${APP_TIFF_COMPRESSION:DEFLATE}
       compression-quality: ${APP_TIFF_COMPRESSION_QUALITY:0.3}
       transparent-layer: ${APP_TIFF_TRANSPARENT_LAYER:true}
       layer-zip: ${APP_TIFF_LAYER_ZIP:true}
+      white-enabled: ${APP_TIFF_WHITE_ENABLED:true}
       white-channel-name: ${APP_TIFF_WHITE_CHANNEL:W1}
       white-choke-pixels: ${APP_TIFF_WHITE_CHOKE:1}
 
@@ -67,3 +77,5 @@ app:
     tif-dpi: ${APP_TIFF_DPI:300}
     # A download waiting for a TIF still being built gives up after this (same bound as the zip).
     wait-timeout-ms: ${APP_EXPORT_TIMEOUT_MS:1800000}
+    # Below this much free disk (MB) TIFs are no longer built ahead, only when someone asks.
+    prebuild-min-free-mb: ${APP_TIFF_PREBUILD_MIN_FREE_MB:1024}
