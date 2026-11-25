@@ -7,7 +7,7 @@ Người quản lý có máy chủ Tino (Ubuntu 24.04, 6 GB RAM, đang chạy n8
 
 ## Quyết định
 - Frontend: Render Static Site, rewrite mọi đường về `index.html`.
-- Backend: Docker, giới hạn container 1,5 GB, sau nginx có sẵn với server block riêng cho `in.dreamate.me` (DNS Cloudflare, chế độ DNS only), chứng chỉ certbot. Không đụng site n8n.
+- Backend: Docker, giới hạn container 1,5 GB, sau nginx có sẵn với server block riêng cho `in.thanhtungtextile.vn` (DNS ở Mắt Bão; đổi từ in.dreamate.me ngày 25/11 vì dreamate.me để DNS trên một tài khoản Cloudflare chưa truy cập được), chứng chỉ certbot. Không đụng site n8n.
 
 ## Phương án đã cân nhắc
 - Thêm Caddy: tự cấp HTTPS gọn hơn nhưng tranh cổng 80/443 với nginx đang chạy.

@@ -8,7 +8,7 @@ services:
     staticPublishPath: dist
     envVars:
       - key: VITE_API_BASE_URL
-        value: https://in.dreamate.me
+        value: https://in.thanhtungtextile.vn
       # Vite 8 needs Node >= 20.19
       - key: NODE_VERSION
         value: 22.12.0

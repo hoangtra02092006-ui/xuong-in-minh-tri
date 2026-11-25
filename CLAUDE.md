@@ -11,7 +11,7 @@
 ## Công nghệ
 - Backend: Java 21, Spring Boot 3.3, Apache PDFBox 3, Maven wrapper. Frontend: Vue 3 + TypeScript + Vite, Pinia, Vue Router, Axios, Vitest.
 - Chưa có database (job và metadata trong RAM, file trên đĩa).
-- Hosting: frontend Render Static Site; backend Docker sau nginx trên máy chủ Tino, tên miền `in.dreamate.me` (ADR-003).
+- Hosting: frontend Render Static Site; backend Docker sau nginx trên máy chủ Tino, tên miền `in.thanhtungtextile.vn` (ADR-003).
 
 ## Lệnh (đã chạy thử 25/11 trên Linux; PowerShell dùng `.\mvnw.cmd` thay `./mvnw`)
 | Việc | Lệnh |

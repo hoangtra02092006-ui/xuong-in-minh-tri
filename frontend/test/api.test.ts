@@ -14,8 +14,8 @@ describe('resolveApiConfig', () => {
     expect(resolveApiConfig({})).toEqual({ baseUrl: '', useMock: true })
   })
   it('real backend when URL set, trailing slash removed', () => {
-    expect(resolveApiConfig({ VITE_API_BASE_URL: 'https://in.dreamate.me/' })).toEqual({
-      baseUrl: 'https://in.dreamate.me',
+    expect(resolveApiConfig({ VITE_API_BASE_URL: 'https://in.thanhtungtextile.vn/' })).toEqual({
+      baseUrl: 'https://in.thanhtungtextile.vn',
       useMock: false,
     })
   })
@@ -24,9 +24,9 @@ describe('resolveApiConfig', () => {
     expect(resolveApiConfig({ VITE_USE_MOCK: 'false' }).useMock).toBe(false)
   })
   it('builds absolute URLs for relative paths', () => {
-    const cfg = { baseUrl: 'https://in.dreamate.me', useMock: false }
-    expect(apiUrl('/api/v1/files/1/preview', cfg)).toBe('https://in.dreamate.me/api/v1/files/1/preview')
-    expect(apiUrl('api/v1/x', cfg)).toBe('https://in.dreamate.me/api/v1/x')
+    const cfg = { baseUrl: 'https://in.thanhtungtextile.vn', useMock: false }
+    expect(apiUrl('/api/v1/files/1/preview', cfg)).toBe('https://in.thanhtungtextile.vn/api/v1/files/1/preview')
+    expect(apiUrl('api/v1/x', cfg)).toBe('https://in.thanhtungtextile.vn/api/v1/x')
   })
 })
 

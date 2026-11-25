@@ -25,7 +25,7 @@ import {
   pxToMm,
 } from '@/shared/units'
 
-const cfg = { baseUrl: 'https://in.dreamate.me', useMock: false }
+const cfg = { baseUrl: 'https://in.thanhtungtextile.vn', useMock: false }
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -34,12 +34,12 @@ describe('real API service', () => {
 
   it('builds URLs for previews and downloads', () => {
     expect(api.isDemo).toBe(false)
-    expect(api.getPreviewUrl('a b')).toBe('https://in.dreamate.me/api/v1/files/a%20b/preview')
+    expect(api.getPreviewUrl('a b')).toBe('https://in.thanhtungtextile.vn/api/v1/files/a%20b/preview')
     expect(api.sheetDownloadUrl('j1', 0, 'tif')).toBe(
-      'https://in.dreamate.me/api/v1/nesting/jobs/j1/sheets/0/tif',
+      'https://in.thanhtungtextile.vn/api/v1/nesting/jobs/j1/sheets/0/tif',
     )
     expect(api.zipDownloadUrl('j1', 'cut')).toBe(
-      'https://in.dreamate.me/api/v1/nesting/jobs/j1/export.zip?format=cut',
+      'https://in.thanhtungtextile.vn/api/v1/nesting/jobs/j1/export.zip?format=cut',
     )
   })
 
